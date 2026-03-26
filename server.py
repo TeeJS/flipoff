@@ -15,6 +15,7 @@ from aiohttp import web
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = PROJECT_ROOT / 'flipoff.config.json'
+MESSAGES_PATH = PROJECT_ROOT / 'flipoff.messages.json'
 ADMIN_PASSWORD_ENV = 'FLIPOFF_ADMIN_PASSWORD'
 
 DEFAULT_COLS = 18
@@ -86,6 +87,7 @@ ADMIN_PASSWORD_KEY = web.AppKey('admin_password', str)
 GENERATED_ADMIN_PASSWORD_KEY = web.AppKey('generated_admin_password', bool)
 SESSION_TOKENS_KEY = web.AppKey('session_tokens', set)
 CONFIG_PATH_KEY = web.AppKey('config_path', object)
+MESSAGES_PATH_KEY = web.AppKey('messages_path', object)
 OVERRIDE_TASK_KEY = web.AppKey('override_task', OverrideTaskState)
 
 
@@ -152,7 +154,7 @@ def normalize_default_messages(messages: Any, cols: int, rows: int) -> list[list
     return normalized_messages
 
 
-def normalize_display_config_payload(payload: Any) -> DisplayConfig:
+def normalize_runtime_settings_payload(payload: Any) -> tuple[int, int, int]:
     if not isinstance(payload, dict):
         raise ValueError('Request body must be a JSON object.')
 
@@ -164,6 +166,12 @@ def normalize_display_config_payload(payload: Any) -> DisplayConfig:
         1,
         86400,
     )
+
+    return cols, rows, api_message_duration_seconds
+
+
+def normalize_display_config_payload(payload: Any) -> DisplayConfig:
+    cols, rows, api_message_duration_seconds = normalize_runtime_settings_payload(payload)
     default_messages = normalize_default_messages(payload.get('defaultMessages'), cols, rows)
 
     return DisplayConfig(
@@ -174,14 +182,52 @@ def normalize_display_config_payload(payload: Any) -> DisplayConfig:
     )
 
 
-def load_display_config(config_path: Path | None) -> DisplayConfig:
+def load_default_messages(
+    messages_path: Path | None,
+    *,
+    cols: int,
+    rows: int,
+    fallback_messages: Any | None = None,
+) -> list[list[str]]:
+    if messages_path is not None and messages_path.exists():
+        with messages_path.open('r', encoding='utf-8') as messages_file:
+            payload = json.load(messages_file)
+        return normalize_default_messages(payload, cols, rows)
+
+    if fallback_messages is not None:
+        return normalize_default_messages(fallback_messages, cols, rows)
+
+    return normalize_default_messages([message.copy() for message in DEFAULT_MESSAGES], cols, rows)
+
+
+def load_display_config(config_path: Path | None, messages_path: Path | None = MESSAGES_PATH) -> DisplayConfig:
     if config_path is None or not config_path.exists():
-        return default_display_config()
+        default_config = default_display_config()
+        default_config.default_messages = load_default_messages(
+            messages_path,
+            cols=default_config.cols,
+            rows=default_config.rows,
+            fallback_messages=default_config.default_messages,
+        )
+        return default_config
 
     with config_path.open('r', encoding='utf-8') as config_file:
         payload = json.load(config_file)
 
-    return normalize_display_config_payload(payload)
+    cols, rows, api_message_duration_seconds = normalize_runtime_settings_payload(payload)
+    default_messages = load_default_messages(
+        messages_path,
+        cols=cols,
+        rows=rows,
+        fallback_messages=payload.get('defaultMessages') if isinstance(payload, dict) else None,
+    )
+
+    return DisplayConfig(
+        cols=cols,
+        rows=rows,
+        default_messages=default_messages,
+        api_message_duration_seconds=api_message_duration_seconds,
+    )
 
 
 def save_display_config(config_path: Path | None, config: DisplayConfig) -> None:
@@ -191,6 +237,24 @@ def save_display_config(config_path: Path | None, config: DisplayConfig) -> None
     with config_path.open('w', encoding='utf-8') as config_file:
         json.dump(config.serialize(), config_file, indent=2)
         config_file.write('\n')
+
+
+def save_default_messages(messages_path: Path | None, default_messages: list[list[str]]) -> None:
+    if messages_path is None:
+        return
+
+    serializable_messages = [trim_message_lines(message) for message in default_messages]
+
+    with messages_path.open('w', encoding='utf-8') as messages_file:
+        json.dump(serializable_messages, messages_file, indent=2)
+        messages_file.write('\n')
+
+
+def trim_message_lines(message: list[str]) -> list[str]:
+    trimmed = message.copy()
+    while len(trimmed) > 1 and trimmed[-1] == '':
+        trimmed.pop()
+    return trimmed
 
 
 def build_message_event(state: MessageState) -> dict[str, Any]:
@@ -458,6 +522,7 @@ async def admin_config_put(request: web.Request) -> web.Response:
     current_config.api_message_duration_seconds = updated_config.api_message_duration_seconds
 
     save_display_config(request.app[CONFIG_PATH_KEY], current_config)
+    save_default_messages(request.app[MESSAGES_PATH_KEY], current_config.default_messages)
     await clear_override(request.app)
     await broadcast_display_config(request.app)
 
@@ -526,8 +591,13 @@ async def announce_admin_password(app: web.Application) -> None:
         print(f'[flipoff] Generated admin password: {app[ADMIN_PASSWORD_KEY]}', flush=True)
 
 
-def create_app(*, admin_password: str | None = None, config_path: Path | None = CONFIG_PATH) -> web.Application:
-    display_config = load_display_config(config_path)
+def create_app(
+    *,
+    admin_password: str | None = None,
+    config_path: Path | None = CONFIG_PATH,
+    messages_path: Path | None = MESSAGES_PATH,
+) -> web.Application:
+    display_config = load_display_config(config_path, messages_path)
     message_state = MessageState(lines=[''] * display_config.rows)
     resolved_admin_password, generated_admin_password = resolve_admin_password(admin_password)
 
@@ -539,6 +609,7 @@ def create_app(*, admin_password: str | None = None, config_path: Path | None = 
     app[GENERATED_ADMIN_PASSWORD_KEY] = generated_admin_password
     app[SESSION_TOKENS_KEY] = set()
     app[CONFIG_PATH_KEY] = config_path
+    app[MESSAGES_PATH_KEY] = messages_path
     app[OVERRIDE_TASK_KEY] = OverrideTaskState()
 
     app.on_startup.append(announce_admin_password)

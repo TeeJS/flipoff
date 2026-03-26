@@ -1,18 +1,24 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from aiohttp.test_utils import AioHTTPTestCase
 
-from server import create_app
+from server import DISPLAY_CONFIG_KEY, create_app
 
 
 class FlipOffServerTests(AioHTTPTestCase):
     async def get_application(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.config_path = Path(self.temp_dir.name) / 'flipoff.config.json'
-        return create_app(admin_password='secret-password', config_path=self.config_path)
+        self.messages_path = Path(self.temp_dir.name) / 'flipoff.messages.json'
+        return create_app(
+            admin_password='secret-password',
+            config_path=self.config_path,
+            messages_path=self.messages_path,
+        )
 
     def tearDown(self):
         super().tearDown()
@@ -158,6 +164,43 @@ class FlipOffServerTests(AioHTTPTestCase):
         public_payload = await public_config.json()
         self.assertEqual(public_payload['cols'], 16)
         self.assertEqual(public_payload['rows'], 4)
+
+    async def test_admin_config_update_persists_messages_to_dedicated_file(self):
+        await self.authenticate()
+        response = await self.client.put(
+            '/api/admin/config',
+            json={
+                'cols': 18,
+                'rows': 5,
+                'apiMessageDurationSeconds': 30,
+                'defaultMessages': [
+                    ['welcome home', 'simon'],
+                    ['maintenance', 'window'],
+                ],
+            },
+        )
+        self.assertEqual(response.status, 200)
+        self.assertTrue(self.messages_path.exists())
+        self.assertEqual(
+            json.loads(self.messages_path.read_text(encoding='utf-8')),
+            [
+                ['WELCOME HOME', 'SIMON'],
+                ['MAINTENANCE', 'WINDOW'],
+            ],
+        )
+
+        reloaded_app = create_app(
+            admin_password='secret-password',
+            config_path=self.config_path,
+            messages_path=self.messages_path,
+        )
+        self.assertEqual(
+            reloaded_app[DISPLAY_CONFIG_KEY].default_messages,
+            [
+                ['WELCOME HOME', 'SIMON', '', '', ''],
+                ['MAINTENANCE', 'WINDOW', '', '', ''],
+            ],
+        )
 
     async def test_delete_message_clears_override(self):
         await self.client.post('/api/message', json={'lines': ['remote message']})
