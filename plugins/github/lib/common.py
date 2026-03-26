@@ -22,6 +22,57 @@ def compact_repository(owner: str, repo: str) -> str:
     return f'{owner}/{repo}'
 
 
+def repository_heading(
+    owner: str,
+    repo: str,
+    *,
+    design: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> str | None:
+    if error:
+        return error.upper()
+
+    if design is not None and not bool(design.get('showRepository', True)):
+        return None
+
+    return compact_repository(owner, repo).upper()
+
+
+def format_aligned_metrics(rows: list[tuple[str, str]], cols: int) -> list[str]:
+    if not rows:
+        return []
+
+    normalized_rows = [
+        (
+            str(label or '').strip().upper(),
+            str(value or '').strip().upper(),
+        )
+        for label, value in rows
+    ]
+
+    label_width = max(len(label) for label, _ in normalized_rows)
+    value_width = max(len(value) for _, value in normalized_rows)
+    gap_width = 2
+
+    if label_width + gap_width + value_width > cols:
+        gap_width = 1
+
+    if label_width + gap_width + value_width > cols:
+        label_width = max(1, cols - gap_width - value_width)
+
+    if label_width + gap_width + value_width > cols:
+        return [
+            f'{label} {value}'[:cols]
+            for label, value in normalized_rows
+        ]
+
+    gap = ' ' * gap_width
+    return [
+        f'{label[:label_width].ljust(label_width)}{gap}{value.rjust(value_width)}'
+        for label, value in normalized_rows
+    ]
+
+
 async def fetch_repository(owner: str, repo: str, http_session) -> dict[str, Any]:
     async with http_session.get(
         f'{GITHUB_API_BASE_URL}/repos/{owner}/{repo}',

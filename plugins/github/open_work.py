@@ -9,10 +9,11 @@ from ..base import (
 )
 from .lib.common import (
     DEFAULT_GITHUB_REPOSITORY,
-    compact_repository,
     count_open_pull_requests,
     fetch_repository,
+    format_aligned_metrics,
     normalize_repository,
+    repository_heading,
 )
 
 
@@ -40,6 +41,13 @@ class GitHubOpenWorkPlugin(ScreenPlugin):
                 default='',
                 placeholder='OPEN WORK',
             ),
+            PluginField(
+                name='showRepository',
+                label='Show Organization / Repo',
+                field_type='checkbox',
+                default=True,
+                help_text='Display the owner/repository line above the issue and PR counts.',
+            ),
         ),
     )
 
@@ -62,24 +70,36 @@ class GitHubOpenWorkPlugin(ScreenPlugin):
         except (TypeError, ValueError):
             open_issues = 0
 
-        repo_label = compact_repository(owner, repo).upper()
-
-        lines = self.with_optional_title([
-            self._fit(repo_label, context.cols),
-            self._fit(f'ISSUE {open_issues}', context.cols),
-            self._fit(f'PR {open_prs}', context.cols),
-        ], design=design, context=context)
+        lines = self.with_optional_title(self._build_metric_lines(
+            repository_heading(owner, repo, design=design),
+            format_aligned_metrics([
+                ('ISSUE', str(open_issues)),
+                ('PR', str(open_prs)),
+            ], context.cols),
+            context.cols,
+        ), design=design, context=context)
 
         return PluginRefreshResult(lines=lines[: context.rows])
 
     def placeholder_lines(self, *, settings, design, context: PluginContext, error=None):
         owner, repo = normalize_repository(settings.get('repository'))
-        detail = (error or compact_repository(owner, repo)).upper()
-        return self.with_optional_title([
-            self._fit(detail, context.cols),
-            self._fit('ISSUE --', context.cols),
-            self._fit('PR --', context.cols),
-        ], design=design, context=context)[: context.rows]
+        lines = self.with_optional_title(self._build_metric_lines(
+            repository_heading(owner, repo, design=design, error=error),
+            format_aligned_metrics([
+                ('ISSUE', '--'),
+                ('PR', '--'),
+            ], context.cols),
+            context.cols,
+        ), design=design, context=context)
+        return lines[: context.rows]
+
+    def _build_metric_lines(self, heading: str | None, metrics: list[str], cols: int) -> list[str]:
+        lines: list[str] = []
+        if heading:
+            lines.append(self._fit(heading, cols))
+
+        lines.extend(self._fit(metric, cols) for metric in metrics)
+        return lines
 
     def _fit(self, value: str, cols: int) -> str:
         return value[:cols]

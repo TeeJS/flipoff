@@ -34,6 +34,41 @@ def fit(value: Any, cols: int) -> str:
     return str(value or '')[:cols]
 
 
+def format_aligned_pairs(rows: list[tuple[Any, Any]], cols: int) -> list[str]:
+    if not rows:
+        return []
+
+    normalized_rows = [
+        (
+            str(label or '').strip().upper(),
+            str(value or '').strip().upper(),
+        )
+        for label, value in rows
+    ]
+
+    label_width = max(len(label) for label, _ in normalized_rows)
+    value_width = max(len(value) for _, value in normalized_rows)
+    gap_width = 2
+
+    if label_width + gap_width + value_width > cols:
+        gap_width = 1
+
+    if label_width + gap_width + value_width > cols:
+        label_width = max(1, cols - gap_width - value_width)
+
+    if label_width + gap_width + value_width > cols:
+        return [
+            f'{label} {value}'[:cols]
+            for label, value in normalized_rows
+        ]
+
+    gap = ' ' * gap_width
+    return [
+        f'{label[:label_width].ljust(label_width)}{gap}{value.rjust(value_width)}'
+        for label, value in normalized_rows
+    ]
+
+
 def build_headers(api_key: str) -> dict[str, str]:
     return {
         'Accept': 'application/json',

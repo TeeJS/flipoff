@@ -9,9 +9,10 @@ from ..base import (
 )
 from .lib.common import (
     DEFAULT_GITHUB_REPOSITORY,
-    compact_repository,
     fetch_repository,
+    format_aligned_metrics,
     normalize_repository,
+    repository_heading,
 )
 
 
@@ -39,6 +40,13 @@ class GitHubRepoStatsPlugin(ScreenPlugin):
                 default='',
                 placeholder='GITHUB STATS',
             ),
+            PluginField(
+                name='showRepository',
+                label='Show Organization / Repo',
+                field_type='checkbox',
+                default=True,
+                help_text='Display the owner/repository line above the GitHub metrics.',
+            ),
         ),
     )
 
@@ -55,25 +63,38 @@ class GitHubRepoStatsPlugin(ScreenPlugin):
         owner, repo = normalize_repository(settings.get('repository'))
         payload = await fetch_repository(owner, repo, http_session)
 
-        repo_label = compact_repository(owner, repo).upper()
-        lines = self.with_optional_title([
-            self._fit(repo_label, context.cols),
-            self._fit(f"STAR {self._number(payload.get('stargazers_count'))}", context.cols),
-            self._fit(f"WATCH {self._number(payload.get('subscribers_count', payload.get('watchers_count')))}", context.cols),
-            self._fit(f"FORK {self._number(payload.get('forks_count'))}", context.cols),
-        ], design=design, context=context)
+        lines = self.with_optional_title(self._build_metric_lines(
+            repository_heading(owner, repo, design=design),
+            format_aligned_metrics([
+                ('STAR', self._number(payload.get('stargazers_count'))),
+                ('WATCH', self._number(payload.get('subscribers_count', payload.get('watchers_count')))),
+                ('FORK', self._number(payload.get('forks_count'))),
+            ], context.cols),
+            context.cols,
+        ), design=design, context=context)
 
         return PluginRefreshResult(lines=lines[: context.rows])
 
     def placeholder_lines(self, *, settings, design, context: PluginContext, error=None):
         owner, repo = normalize_repository(settings.get('repository'))
-        detail = (error or compact_repository(owner, repo)).upper()
-        return self.with_optional_title([
-            self._fit(detail, context.cols),
-            self._fit('STAR --', context.cols),
-            self._fit('WATCH --', context.cols),
-            self._fit('FORK --', context.cols),
-        ], design=design, context=context)[: context.rows]
+        lines = self.with_optional_title(self._build_metric_lines(
+            repository_heading(owner, repo, design=design, error=error),
+            format_aligned_metrics([
+                ('STAR', '--'),
+                ('WATCH', '--'),
+                ('FORK', '--'),
+            ], context.cols),
+            context.cols,
+        ), design=design, context=context)
+        return lines[: context.rows]
+
+    def _build_metric_lines(self, heading: str | None, metrics: list[str], cols: int) -> list[str]:
+        lines: list[str] = []
+        if heading:
+            lines.append(self._fit(heading, cols))
+
+        lines.extend(self._fit(metric, cols) for metric in metrics)
+        return lines
 
     def _number(self, value) -> str:
         try:

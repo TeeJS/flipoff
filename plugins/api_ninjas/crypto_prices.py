@@ -11,6 +11,7 @@ from .lib.common import (
     API_NINJAS_CRYPTO_PRICE_URL,
     build_headers,
     fit,
+    format_aligned_pairs,
     resolve_api_key,
 )
 
@@ -85,11 +86,13 @@ class CryptoPricesPlugin(ScreenPlugin):
             ]
         )
 
-        lines = []
-        for (display_symbol, _), payload in zip(symbols, prices):
-            lines.append(
-                fit(f'{display_symbol} {self._format_price(payload.get("price"))}', context.cols)
-            )
+        lines = format_aligned_pairs(
+            [
+                (display_symbol, self._format_price(payload.get('price')))
+                for (display_symbol, _), payload in zip(symbols, prices)
+            ],
+            context.cols,
+        )
         lines = self.with_optional_title(lines, design=design, context=context)
 
         return PluginRefreshResult(
@@ -101,9 +104,10 @@ class CryptoPricesPlugin(ScreenPlugin):
 
     def placeholder_lines(self, *, settings, design, context: PluginContext, error=None):
         symbols = [display_symbol for display_symbol, _ in self._resolve_symbols(settings)]
-        lines = []
-        for symbol in symbols:
-            lines.append(fit(f'{symbol} --', context.cols))
+        lines = format_aligned_pairs(
+            [(symbol, '--') for symbol in symbols],
+            context.cols,
+        )
         if error and context.rows > len(lines):
             lines.append(fit(str(error).upper(), context.cols))
         return self.with_optional_title(lines, design=design, context=context)[: context.rows]

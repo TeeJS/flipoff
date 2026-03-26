@@ -55,7 +55,7 @@ class ApiNinjasCryptoPricesTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             result.lines,
-            ['BTC 69217.76', 'ETH 2077.42', 'SOLUSDT 86.65'],
+            ['BTC      69217.76', 'ETH       2077.42', 'SOLUSDT     86.65'],
         )
 
     def test_placeholder_uses_three_symbols(self):
@@ -66,7 +66,7 @@ class ApiNinjasCryptoPricesTests(unittest.IsolatedAsyncioTestCase):
             context=PluginContext(cols=18, rows=5),
             error=None,
         )
-        self.assertEqual(lines, ['BTC --', 'ETH --', 'SOL --'])
+        self.assertEqual(lines, ['BTC  --', 'ETH  --', 'SOL  --'])
 
     def test_placeholder_includes_title_when_override_is_set(self):
         plugin = CryptoPricesPlugin()
@@ -76,7 +76,30 @@ class ApiNinjasCryptoPricesTests(unittest.IsolatedAsyncioTestCase):
             context=PluginContext(cols=18, rows=5),
             error=None,
         )
-        self.assertEqual(lines, ['CRYPTO', '', 'BTC --', 'ETH --', 'SOL --'])
+        self.assertEqual(lines, ['CRYPTO', '', 'BTC  --', 'ETH  --', 'SOL  --'])
+
+    async def test_refresh_aligns_price_column_for_mixed_symbol_lengths(self):
+        plugin = CryptoPricesPlugin()
+        session = FakeSession(
+            {
+                'BTCUSD': {'price': '69217.76000000'},
+                'ETHUSD': {'price': '2.00000000'},
+                'SOLUSDT': {'price': '86.65000000'},
+            }
+        )
+
+        result = await plugin.refresh(
+            settings={'symbol1': 'btc', 'symbol2': 'eth', 'symbol3': 'SOLUSDT'},
+            design={'title': ''},
+            context=PluginContext(cols=18, rows=5),
+            http_session=session,
+            common_settings={'apiNinjasApiKey': 'secret'},
+        )
+
+        self.assertEqual(
+            result.lines,
+            ['BTC      69217.76', 'ETH             2', 'SOLUSDT     86.65'],
+        )
 
 
 if __name__ == '__main__':
