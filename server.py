@@ -11,11 +11,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
+
+from plugins import load_plugins
+from plugins.base import PluginContext, PluginField, ScreenPlugin
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = PROJECT_ROOT / 'flipoff.config.json'
-MESSAGES_PATH = PROJECT_ROOT / 'flipoff.messages.json'
+SCREENS_PATH = PROJECT_ROOT / 'flipoff.screens.json'
+LEGACY_MESSAGES_PATH = PROJECT_ROOT / 'flipoff.messages.json'
 ADMIN_PASSWORD_ENV = 'FLIPOFF_ADMIN_PASSWORD'
 
 DEFAULT_COLS = 18
@@ -50,6 +54,13 @@ class DisplayConfig:
             'apiMessageDurationSeconds': self.api_message_duration_seconds,
         }
 
+    def serialize_settings(self) -> dict[str, Any]:
+        return {
+            'cols': self.cols,
+            'rows': self.rows,
+            'apiMessageDurationSeconds': self.api_message_duration_seconds,
+        }
+
 
 @dataclass
 class MessageState:
@@ -80,14 +91,24 @@ class OverrideTaskState:
     task: asyncio.Task | None = None
 
 
+@dataclass
+class ScreenState:
+    screens: list[dict[str, Any]] = field(default_factory=list)
+    refresh_tasks: dict[str, asyncio.Task] = field(default_factory=dict)
+
+
 DISPLAY_CONFIG_KEY = web.AppKey('display_config', DisplayConfig)
 MESSAGE_STATE_KEY = web.AppKey('message_state', MessageState)
+SCREEN_STATE_KEY = web.AppKey('screen_state', ScreenState)
 WS_CLIENTS_KEY = web.AppKey('ws_clients', set)
 ADMIN_PASSWORD_KEY = web.AppKey('admin_password', str)
 GENERATED_ADMIN_PASSWORD_KEY = web.AppKey('generated_admin_password', bool)
 SESSION_TOKENS_KEY = web.AppKey('session_tokens', set)
 CONFIG_PATH_KEY = web.AppKey('config_path', object)
-MESSAGES_PATH_KEY = web.AppKey('messages_path', object)
+SCREENS_PATH_KEY = web.AppKey('screens_path', object)
+LEGACY_MESSAGES_PATH_KEY = web.AppKey('legacy_messages_path', object)
+PLUGINS_KEY = web.AppKey('plugins', dict)
+PLUGIN_HTTP_SESSION_KEY = web.AppKey('plugin_http_session', object)
 OVERRIDE_TASK_KEY = web.AppKey('override_task', OverrideTaskState)
 
 
@@ -98,6 +119,19 @@ def default_display_config() -> DisplayConfig:
         default_messages=[message.copy() for message in DEFAULT_MESSAGES],
         api_message_duration_seconds=DEFAULT_API_MESSAGE_DURATION_SECONDS,
     )
+
+
+def build_default_manual_screens() -> list[dict[str, Any]]:
+    return [
+        {
+            'id': f'manual-{index + 1}',
+            'type': 'manual',
+            'name': '',
+            'enabled': True,
+            'lines': trim_message_lines(message),
+        }
+        for index, message in enumerate(DEFAULT_MESSAGES)
+    ]
 
 
 def _json_error(message: str, status: int = 400) -> web.Response:
@@ -114,6 +148,22 @@ def _coerce_int(value: Any, field_name: str, minimum: int, maximum: int) -> int:
     return value
 
 
+def _coerce_bool(value: Any, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"'{field_name}' must be a boolean.")
+    return value
+
+
+def _coerce_optional_string(value: Any, field_name: str) -> str:
+    if value is None:
+        return ''
+
+    if not isinstance(value, str):
+        raise ValueError(f"'{field_name}' must be a string.")
+
+    return value.strip()
+
+
 def pad_lines(lines: list[str], rows: int) -> list[str]:
     return lines + [''] * max(0, rows - len(lines))
 
@@ -124,34 +174,60 @@ def center_lines(lines: list[str], rows: int) -> list[str]:
     return [''] * top_padding + lines + [''] * bottom_padding
 
 
+def trim_message_lines(message: list[str]) -> list[str]:
+    trimmed = message.copy()
+    while len(trimmed) > 1 and trimmed[-1] == '':
+        trimmed.pop()
+    return trimmed
+
+
+def normalize_message_lines(
+    lines: Any,
+    *,
+    cols: int,
+    rows: int,
+    field_name: str,
+    allow_empty: bool = False,
+) -> list[str]:
+    if not isinstance(lines, list):
+        raise ValueError(f"'{field_name}' must be an array of strings.")
+
+    if not lines and allow_empty:
+        return []
+
+    if not 1 <= len(lines) <= rows:
+        raise ValueError(f"'{field_name}' must contain between 1 and {rows} items.")
+
+    normalized: list[str] = []
+    for index, line in enumerate(lines, start=1):
+        if not isinstance(line, str):
+            raise ValueError(f"{field_name} line {index} must be a string.")
+
+        normalized_line = line.strip().upper()
+        if len(normalized_line) > cols:
+            raise ValueError(f"{field_name} line {index} exceeds {cols} characters.")
+
+        normalized.append(normalized_line)
+
+    return trim_message_lines(normalized)
+
+
 def normalize_default_messages(messages: Any, cols: int, rows: int) -> list[list[str]]:
     if not isinstance(messages, list) or len(messages) == 0:
         raise ValueError("'defaultMessages' must be a non-empty array of message arrays.")
 
-    normalized_messages: list[list[str]] = []
-    for message_index, message in enumerate(messages, start=1):
-        if not isinstance(message, list) or len(message) == 0:
-            raise ValueError(f'Default message {message_index} must be a non-empty array of strings.')
-
-        if len(message) > rows:
-            raise ValueError(f'Default message {message_index} exceeds the configured row count of {rows}.')
-
-        normalized_lines: list[str] = []
-        for line_index, line in enumerate(message, start=1):
-            if not isinstance(line, str):
-                raise ValueError(f'Default message {message_index}, line {line_index} must be a string.')
-
-            normalized_line = line.strip().upper()
-            if len(normalized_line) > cols:
-                raise ValueError(
-                    f'Default message {message_index}, line {line_index} exceeds {cols} characters.'
-                )
-
-            normalized_lines.append(normalized_line)
-
-        normalized_messages.append(pad_lines(normalized_lines, rows))
-
-    return normalized_messages
+    return [
+        pad_lines(
+            normalize_message_lines(
+                message,
+                cols=cols,
+                rows=rows,
+                field_name=f'defaultMessages[{index}]',
+            ),
+            rows,
+        )
+        for index, message in enumerate(messages)
+    ]
 
 
 def normalize_runtime_settings_payload(payload: Any) -> tuple[int, int, int]:
@@ -170,91 +246,430 @@ def normalize_runtime_settings_payload(payload: Any) -> tuple[int, int, int]:
     return cols, rows, api_message_duration_seconds
 
 
-def normalize_display_config_payload(payload: Any) -> DisplayConfig:
-    cols, rows, api_message_duration_seconds = normalize_runtime_settings_payload(payload)
-    default_messages = normalize_default_messages(payload.get('defaultMessages'), cols, rows)
-
-    return DisplayConfig(
-        cols=cols,
-        rows=rows,
-        default_messages=default_messages,
-        api_message_duration_seconds=api_message_duration_seconds,
-    )
-
-
-def load_default_messages(
-    messages_path: Path | None,
-    *,
-    cols: int,
-    rows: int,
-    fallback_messages: Any | None = None,
-) -> list[list[str]]:
-    if messages_path is not None and messages_path.exists():
-        with messages_path.open('r', encoding='utf-8') as messages_file:
-            payload = json.load(messages_file)
-        return normalize_default_messages(payload, cols, rows)
-
-    if fallback_messages is not None:
-        return normalize_default_messages(fallback_messages, cols, rows)
-
-    return normalize_default_messages([message.copy() for message in DEFAULT_MESSAGES], cols, rows)
-
-
-def load_display_config(config_path: Path | None, messages_path: Path | None = MESSAGES_PATH) -> DisplayConfig:
+def load_display_settings(config_path: Path | None) -> tuple[DisplayConfig, Any | None]:
     if config_path is None or not config_path.exists():
-        default_config = default_display_config()
-        default_config.default_messages = load_default_messages(
-            messages_path,
-            cols=default_config.cols,
-            rows=default_config.rows,
-            fallback_messages=default_config.default_messages,
-        )
-        return default_config
+        return default_display_config(), None
 
     with config_path.open('r', encoding='utf-8') as config_file:
         payload = json.load(config_file)
 
     cols, rows, api_message_duration_seconds = normalize_runtime_settings_payload(payload)
-    default_messages = load_default_messages(
-        messages_path,
-        cols=cols,
-        rows=rows,
-        fallback_messages=payload.get('defaultMessages') if isinstance(payload, dict) else None,
-    )
-
-    return DisplayConfig(
-        cols=cols,
-        rows=rows,
-        default_messages=default_messages,
-        api_message_duration_seconds=api_message_duration_seconds,
+    return (
+        DisplayConfig(
+            cols=cols,
+            rows=rows,
+            default_messages=[],
+            api_message_duration_seconds=api_message_duration_seconds,
+        ),
+        payload.get('defaultMessages') if isinstance(payload, dict) else None,
     )
 
 
-def save_display_config(config_path: Path | None, config: DisplayConfig) -> None:
+def save_display_settings(config_path: Path | None, config: DisplayConfig) -> None:
     if config_path is None:
         return
 
     with config_path.open('w', encoding='utf-8') as config_file:
-        json.dump(config.serialize(), config_file, indent=2)
+        json.dump(config.serialize_settings(), config_file, indent=2)
         config_file.write('\n')
 
 
-def save_default_messages(messages_path: Path | None, default_messages: list[list[str]]) -> None:
-    if messages_path is None:
+def build_manual_screens_from_messages(
+    messages: Any | None,
+    *,
+    cols: int,
+    rows: int,
+) -> list[dict[str, Any]]:
+    if messages is None:
+        messages = [message.copy() for message in DEFAULT_MESSAGES]
+
+    normalized_messages = normalize_default_messages(messages, cols, rows)
+    return [
+        {
+            'id': f'manual-{index + 1}',
+            'type': 'manual',
+            'name': '',
+            'enabled': True,
+            'lines': trim_message_lines(message),
+        }
+        for index, message in enumerate(normalized_messages)
+    ]
+
+
+def load_screens(
+    screens_path: Path | None,
+    *,
+    legacy_messages_path: Path | None,
+    legacy_default_messages: Any | None,
+    config: DisplayConfig,
+    plugins: dict[str, ScreenPlugin],
+) -> list[dict[str, Any]]:
+    if screens_path is not None and screens_path.exists():
+        with screens_path.open('r', encoding='utf-8') as screens_file:
+            payload = json.load(screens_file)
+        return normalize_screens_payload(
+            payload,
+            config=config,
+            plugins=plugins,
+            existing_screens={},
+        )
+
+    if legacy_messages_path is not None and legacy_messages_path.exists():
+        with legacy_messages_path.open('r', encoding='utf-8') as messages_file:
+            legacy_messages = json.load(messages_file)
+        return build_manual_screens_from_messages(
+            legacy_messages,
+            cols=config.cols,
+            rows=config.rows,
+        )
+
+    if legacy_default_messages is not None:
+        return build_manual_screens_from_messages(
+            legacy_default_messages,
+            cols=config.cols,
+            rows=config.rows,
+        )
+
+    return build_manual_screens_from_messages(
+        [message.copy() for message in DEFAULT_MESSAGES],
+        cols=config.cols,
+        rows=config.rows,
+    )
+
+
+def serialize_screen_for_storage(screen: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        'id': screen['id'],
+        'type': screen['type'],
+        'name': screen.get('name', ''),
+        'enabled': screen.get('enabled', True),
+    }
+
+    if screen['type'] == 'manual':
+        payload['lines'] = trim_message_lines(screen['lines'])
+        return payload
+
+    payload.update(
+        {
+            'pluginId': screen['pluginId'],
+            'refreshIntervalSeconds': screen['refreshIntervalSeconds'],
+            'settings': screen['settings'],
+            'design': screen['design'],
+            'cachedLines': trim_message_lines(screen.get('cachedLines', [])),
+            'lastRefreshedAt': screen.get('lastRefreshedAt'),
+            'lastError': screen.get('lastError'),
+        }
+    )
+    return payload
+
+
+def save_screens(screens_path: Path | None, screens: list[dict[str, Any]]) -> None:
+    if screens_path is None:
         return
 
-    serializable_messages = [trim_message_lines(message) for message in default_messages]
-
-    with messages_path.open('w', encoding='utf-8') as messages_file:
-        json.dump(serializable_messages, messages_file, indent=2)
-        messages_file.write('\n')
+    with screens_path.open('w', encoding='utf-8') as screens_file:
+        json.dump({'screens': [serialize_screen_for_storage(screen) for screen in screens]}, screens_file, indent=2)
+        screens_file.write('\n')
 
 
-def trim_message_lines(message: list[str]) -> list[str]:
-    trimmed = message.copy()
-    while len(trimmed) > 1 and trimmed[-1] == '':
-        trimmed.pop()
-    return trimmed
+def normalize_schema_values(
+    values: Any,
+    schema: tuple[PluginField, ...],
+    *,
+    section_name: str,
+) -> dict[str, Any]:
+    if values is None:
+        values = {}
+
+    if not isinstance(values, dict):
+        raise ValueError(f"'{section_name}' must be a JSON object.")
+
+    normalized: dict[str, Any] = {}
+    for field in schema:
+        raw_value = values.get(field.name, field.default)
+
+        if field.field_type == 'text':
+            if raw_value is None:
+                raw_value = ''
+            if not isinstance(raw_value, str):
+                raise ValueError(f"'{section_name}.{field.name}' must be a string.")
+            normalized_value = raw_value.strip()
+            if field.required and not normalized_value:
+                raise ValueError(f"'{section_name}.{field.name}' is required.")
+            normalized[field.name] = normalized_value
+            continue
+
+        if field.field_type == 'select':
+            if raw_value is None:
+                raw_value = field.default
+            if not isinstance(raw_value, str):
+                raise ValueError(f"'{section_name}.{field.name}' must be a string.")
+            valid_values = {option.value for option in field.options}
+            if raw_value not in valid_values:
+                raise ValueError(f"'{section_name}.{field.name}' must be one of the allowed options.")
+            normalized[field.name] = raw_value
+            continue
+
+        if field.field_type == 'checkbox':
+            normalized[field.name] = _coerce_bool(raw_value, f'{section_name}.{field.name}')
+            continue
+
+        if field.field_type == 'number':
+            if not isinstance(raw_value, (int, float)) or isinstance(raw_value, bool):
+                raise ValueError(f"'{section_name}.{field.name}' must be numeric.")
+            normalized[field.name] = raw_value
+            continue
+
+        raise ValueError(f"Unsupported schema field type '{field.field_type}'.")
+
+    return normalized
+
+
+def generate_screen_id() -> str:
+    return secrets.token_hex(8)
+
+
+def normalize_screens_payload(
+    payload: Any,
+    *,
+    config: DisplayConfig,
+    plugins: dict[str, ScreenPlugin],
+    existing_screens: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    raw_screens = payload.get('screens') if isinstance(payload, dict) else payload
+    if not isinstance(raw_screens, list) or len(raw_screens) == 0:
+        raise ValueError("'screens' must be a non-empty array.")
+
+    normalized_screens: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    for index, raw_screen in enumerate(raw_screens, start=1):
+        if not isinstance(raw_screen, dict):
+            raise ValueError(f'Screen {index} must be a JSON object.')
+
+        screen_id = raw_screen.get('id') if isinstance(raw_screen.get('id'), str) else generate_screen_id()
+        if screen_id in seen_ids:
+            raise ValueError(f"Duplicate screen id '{screen_id}' is not allowed.")
+        seen_ids.add(screen_id)
+
+        screen_type = raw_screen.get('type')
+        name = _coerce_optional_string(raw_screen.get('name'), f'screens[{index}].name')
+        enabled = _coerce_bool(raw_screen.get('enabled', True), f'screens[{index}].enabled')
+
+        if screen_type == 'manual':
+            normalized_screens.append(
+                {
+                    'id': screen_id,
+                    'type': 'manual',
+                    'name': name,
+                    'enabled': enabled,
+                    'lines': normalize_message_lines(
+                        raw_screen.get('lines'),
+                        cols=config.cols,
+                        rows=config.rows,
+                        field_name=f'screens[{index}].lines',
+                    ),
+                }
+            )
+            continue
+
+        if screen_type == 'plugin':
+            plugin_id = raw_screen.get('pluginId')
+            if not isinstance(plugin_id, str) or plugin_id not in plugins:
+                raise ValueError(f"Screen {index} references an unknown plugin.")
+
+            plugin = plugins[plugin_id]
+            refresh_interval_seconds = _coerce_int(
+                raw_screen.get('refreshIntervalSeconds', plugin.manifest.default_refresh_interval_seconds),
+                f'screens[{index}].refreshIntervalSeconds',
+                1,
+                86400,
+            )
+            previous_screen = existing_screens.get(screen_id, {})
+            previous_cached_lines = previous_screen.get('cachedLines', [])
+            cached_lines = normalize_message_lines(
+                previous_cached_lines,
+                cols=config.cols,
+                rows=config.rows,
+                field_name=f'screens[{index}].cachedLines',
+                allow_empty=True,
+            )
+
+            normalized_screens.append(
+                {
+                    'id': screen_id,
+                    'type': 'plugin',
+                    'name': name,
+                    'enabled': enabled,
+                    'pluginId': plugin_id,
+                    'refreshIntervalSeconds': refresh_interval_seconds,
+                    'settings': normalize_schema_values(
+                        raw_screen.get('settings'),
+                        plugin.manifest.settings_schema,
+                        section_name=f'screens[{index}].settings',
+                    ),
+                    'design': normalize_schema_values(
+                        raw_screen.get('design'),
+                        plugin.manifest.design_schema,
+                        section_name=f'screens[{index}].design',
+                    ),
+                    'cachedLines': cached_lines,
+                    'lastRefreshedAt': previous_screen.get('lastRefreshedAt'),
+                    'lastError': previous_screen.get('lastError'),
+                }
+            )
+            continue
+
+        raise ValueError(f"Screen {index} must have type 'manual' or 'plugin'.")
+
+    return normalized_screens
+
+
+def reconcile_screens_for_config_change(
+    screens: list[dict[str, Any]],
+    *,
+    cols: int,
+    rows: int,
+    plugins: dict[str, ScreenPlugin],
+) -> list[dict[str, Any]]:
+    reconciled: list[dict[str, Any]] = []
+
+    for screen in screens:
+        if screen['type'] == 'manual':
+            reconciled.append(
+                {
+                    **screen,
+                    'lines': normalize_message_lines(
+                        screen['lines'],
+                        cols=cols,
+                        rows=rows,
+                        field_name=f"screen '{screen['id']}'",
+                    ),
+                }
+            )
+            continue
+
+        plugin = plugins[screen['pluginId']]
+        reconciled.append(
+            {
+                **screen,
+                'settings': normalize_schema_values(
+                    screen.get('settings'),
+                    plugin.manifest.settings_schema,
+                    section_name=f"screen '{screen['id']}'.settings",
+                ),
+                'design': normalize_schema_values(
+                    screen.get('design'),
+                    plugin.manifest.design_schema,
+                    section_name=f"screen '{screen['id']}'.design",
+                ),
+                'cachedLines': [],
+                'lastRefreshedAt': None,
+                'lastError': None,
+            }
+        )
+
+    return reconciled
+
+
+def resolve_screen_lines(
+    screen: dict[str, Any],
+    config: DisplayConfig,
+    plugins: dict[str, ScreenPlugin],
+) -> list[str]:
+    if screen['type'] == 'manual':
+        return pad_lines(screen['lines'], config.rows)
+
+    plugin = plugins[screen['pluginId']]
+    cached_lines = screen.get('cachedLines') or []
+    if cached_lines:
+        return pad_lines(cached_lines, config.rows)
+
+    placeholder_lines = plugin.placeholder_lines(
+        settings=screen['settings'],
+        design=screen['design'],
+        context=PluginContext(cols=config.cols, rows=config.rows),
+        error=screen.get('lastError'),
+    )
+    return pad_lines(
+        normalize_message_lines(
+            placeholder_lines,
+            cols=config.cols,
+            rows=config.rows,
+            field_name=f"screen '{screen['id']}' placeholder",
+        ),
+        config.rows,
+    )
+
+
+def resolve_default_messages(
+    screens: list[dict[str, Any]],
+    config: DisplayConfig,
+    plugins: dict[str, ScreenPlugin],
+) -> list[list[str]]:
+    messages = [
+        resolve_screen_lines(screen, config, plugins)
+        for screen in screens
+        if screen.get('enabled', True)
+    ]
+    return messages or normalize_default_messages([['NO SCREENS']], config.cols, config.rows)
+
+
+def sync_display_messages(app: web.Application) -> None:
+    config = app[DISPLAY_CONFIG_KEY]
+    config.default_messages = resolve_default_messages(
+        app[SCREEN_STATE_KEY].screens,
+        config,
+        app[PLUGINS_KEY],
+    )
+
+
+def apply_runtime_display_config(config: DisplayConfig) -> dict[str, Any]:
+    return config.serialize()
+
+
+def serialize_screen_for_admin(
+    screen: dict[str, Any],
+    config: DisplayConfig,
+    plugins: dict[str, ScreenPlugin],
+) -> dict[str, Any]:
+    payload = {
+        'id': screen['id'],
+        'type': screen['type'],
+        'name': screen.get('name', ''),
+        'enabled': screen.get('enabled', True),
+        'previewLines': resolve_screen_lines(screen, config, plugins),
+    }
+
+    if screen['type'] == 'manual':
+        payload['lines'] = screen['lines']
+        return payload
+
+    plugin = plugins[screen['pluginId']]
+    payload.update(
+        {
+            'pluginId': screen['pluginId'],
+            'pluginName': plugin.manifest.name,
+            'refreshIntervalSeconds': screen['refreshIntervalSeconds'],
+            'settings': screen['settings'],
+            'design': screen['design'],
+            'lastRefreshedAt': screen.get('lastRefreshedAt'),
+            'lastError': screen.get('lastError'),
+        }
+    )
+    return payload
+
+
+def build_admin_screens_response(app: web.Application) -> dict[str, Any]:
+    config = app[DISPLAY_CONFIG_KEY]
+    plugins = app[PLUGINS_KEY]
+    return {
+        'screens': [
+            serialize_screen_for_admin(screen, config, plugins)
+            for screen in app[SCREEN_STATE_KEY].screens
+        ],
+        'plugins': [plugin.manifest.serialize() for plugin in plugins.values()],
+    }
 
 
 def build_message_event(state: MessageState) -> dict[str, Any]:
@@ -293,6 +708,7 @@ async def broadcast_message_state(app: web.Application) -> None:
 
 
 async def broadcast_display_config(app: web.Application) -> None:
+    sync_display_messages(app)
     await broadcast_event(app, build_config_event(app[DISPLAY_CONFIG_KEY]))
 
 
@@ -332,27 +748,6 @@ def normalize_message(message: Any, cols: int, rows: int) -> list[str]:
     return center_lines(lines, rows)
 
 
-def normalize_lines(lines: Any, cols: int, rows: int) -> list[str]:
-    if not isinstance(lines, list):
-        raise ValueError("The 'lines' field must be an array of strings.")
-
-    if not 1 <= len(lines) <= rows:
-        raise ValueError(f"'lines' must contain between 1 and {rows} items.")
-
-    normalized: list[str] = []
-    for index, line in enumerate(lines, start=1):
-        if not isinstance(line, str):
-            raise ValueError(f'Line {index} must be a string.')
-
-        normalized_line = line.strip().upper()
-        if len(normalized_line) > cols:
-            raise ValueError(f'Line {index} exceeds {cols} characters.')
-
-        normalized.append(normalized_line)
-
-    return pad_lines(normalized, rows)
-
-
 def normalize_payload(payload: Any, config: DisplayConfig) -> list[str]:
     if not isinstance(payload, dict):
         raise ValueError('Request body must be a JSON object.')
@@ -366,7 +761,15 @@ def normalize_payload(payload: Any, config: DisplayConfig) -> list[str]:
     if has_message:
         return normalize_message(payload['message'], config.cols, config.rows)
 
-    return normalize_lines(payload['lines'], config.cols, config.rows)
+    return pad_lines(
+        normalize_message_lines(
+            payload['lines'],
+            cols=config.cols,
+            rows=config.rows,
+            field_name='lines',
+        ),
+        config.rows,
+    )
 
 
 def is_authenticated(request: web.Request) -> bool:
@@ -417,6 +820,96 @@ def schedule_override_clear(app: web.Application) -> None:
     override_task_state.task = asyncio.create_task(_expire_override())
 
 
+def get_screen_by_id(app: web.Application, screen_id: str) -> dict[str, Any] | None:
+    for screen in app[SCREEN_STATE_KEY].screens:
+        if screen['id'] == screen_id:
+            return screen
+    return None
+
+
+async def refresh_plugin_screen(
+    app: web.Application,
+    screen_id: str,
+    *,
+    broadcast: bool,
+) -> dict[str, Any] | None:
+    screen = get_screen_by_id(app, screen_id)
+    if screen is None or screen['type'] != 'plugin' or not screen.get('enabled', True):
+        return screen
+
+    plugin = app[PLUGINS_KEY][screen['pluginId']]
+    config = app[DISPLAY_CONFIG_KEY]
+    previous_last_error = screen.get('lastError')
+    previous_cached_lines = screen.get('cachedLines', []).copy()
+
+    try:
+        result = await plugin.refresh(
+            settings=screen['settings'],
+            design=screen['design'],
+            context=PluginContext(cols=config.cols, rows=config.rows),
+            http_session=app[PLUGIN_HTTP_SESSION_KEY],
+        )
+        screen['cachedLines'] = normalize_message_lines(
+            result.lines,
+            cols=config.cols,
+            rows=config.rows,
+            field_name=f"plugin screen '{screen_id}'",
+        )
+        screen['lastRefreshedAt'] = _utc_now()
+        screen['lastError'] = None
+    except Exception as exc:
+        screen['lastError'] = str(exc)
+
+    save_screens(app[SCREENS_PATH_KEY], app[SCREEN_STATE_KEY].screens)
+    sync_display_messages(app)
+
+    if broadcast and (
+        screen.get('lastError') != previous_last_error or screen.get('cachedLines', []) != previous_cached_lines
+    ):
+        await broadcast_display_config(app)
+
+    return screen
+
+
+async def refresh_all_plugin_screens(app: web.Application, *, broadcast: bool) -> None:
+    for screen in app[SCREEN_STATE_KEY].screens:
+        if screen['type'] != 'plugin' or not screen.get('enabled', True):
+            continue
+        await refresh_plugin_screen(app, screen['id'], broadcast=False)
+
+    sync_display_messages(app)
+    if broadcast:
+        await broadcast_display_config(app)
+
+
+def cancel_plugin_refresh_tasks(app: web.Application) -> None:
+    for task in app[SCREEN_STATE_KEY].refresh_tasks.values():
+        task.cancel()
+    app[SCREEN_STATE_KEY].refresh_tasks.clear()
+
+
+def restart_plugin_refresh_tasks(app: web.Application) -> None:
+    cancel_plugin_refresh_tasks(app)
+
+    for screen in app[SCREEN_STATE_KEY].screens:
+        if screen['type'] != 'plugin' or not screen.get('enabled', True):
+            continue
+        screen_id = screen['id']
+        app[SCREEN_STATE_KEY].refresh_tasks[screen_id] = asyncio.create_task(plugin_refresh_loop(app, screen_id))
+
+
+async def plugin_refresh_loop(app: web.Application, screen_id: str) -> None:
+    try:
+        while True:
+            screen = get_screen_by_id(app, screen_id)
+            if screen is None or screen['type'] != 'plugin' or not screen.get('enabled', True):
+                return
+            await asyncio.sleep(screen['refreshIntervalSeconds'])
+            await refresh_plugin_screen(app, screen_id, broadcast=True)
+    except asyncio.CancelledError:
+        raise
+
+
 async def index_handler(_: web.Request) -> web.Response:
     return web.FileResponse(PROJECT_ROOT / 'index.html')
 
@@ -425,12 +918,9 @@ async def admin_handler(_: web.Request) -> web.Response:
     return web.FileResponse(PROJECT_ROOT / 'admin.html')
 
 
-async def get_display_config(_: web.Request) -> web.Response:
-    return web.json_response(apply_runtime_display_config(_.app[DISPLAY_CONFIG_KEY]))
-
-
-def apply_runtime_display_config(config: DisplayConfig) -> dict[str, Any]:
-    return config.serialize()
+async def get_display_config(request: web.Request) -> web.Response:
+    sync_display_messages(request.app)
+    return web.json_response(apply_runtime_display_config(request.app[DISPLAY_CONFIG_KEY]))
 
 
 async def get_message(request: web.Request) -> web.Response:
@@ -499,6 +989,7 @@ async def admin_session_delete(request: web.Request) -> web.Response:
 
 async def admin_config_get(request: web.Request) -> web.Response:
     require_admin(request)
+    sync_display_messages(request.app)
     return web.json_response(apply_runtime_display_config(request.app[DISPLAY_CONFIG_KEY]))
 
 
@@ -511,22 +1002,94 @@ async def admin_config_put(request: web.Request) -> web.Response:
         return _json_error('Request body must be valid JSON.')
 
     try:
-        updated_config = normalize_display_config_payload(payload)
+        cols, rows, api_message_duration_seconds = normalize_runtime_settings_payload(payload)
+        reconciled_screens = reconcile_screens_for_config_change(
+            request.app[SCREEN_STATE_KEY].screens,
+            cols=cols,
+            rows=rows,
+            plugins=request.app[PLUGINS_KEY],
+        )
     except ValueError as exc:
         return _json_error(str(exc))
 
     current_config = request.app[DISPLAY_CONFIG_KEY]
-    current_config.cols = updated_config.cols
-    current_config.rows = updated_config.rows
-    current_config.default_messages = updated_config.default_messages
-    current_config.api_message_duration_seconds = updated_config.api_message_duration_seconds
+    current_config.cols = cols
+    current_config.rows = rows
+    current_config.api_message_duration_seconds = api_message_duration_seconds
+    request.app[SCREEN_STATE_KEY].screens = reconciled_screens
 
-    save_display_config(request.app[CONFIG_PATH_KEY], current_config)
-    save_default_messages(request.app[MESSAGES_PATH_KEY], current_config.default_messages)
+    save_display_settings(request.app[CONFIG_PATH_KEY], current_config)
+    save_screens(request.app[SCREENS_PATH_KEY], request.app[SCREEN_STATE_KEY].screens)
+
+    await refresh_all_plugin_screens(request.app, broadcast=False)
+    restart_plugin_refresh_tasks(request.app)
     await clear_override(request.app)
     await broadcast_display_config(request.app)
 
     return web.json_response(apply_runtime_display_config(current_config))
+
+
+async def admin_screens_get(request: web.Request) -> web.Response:
+    require_admin(request)
+    return web.json_response(build_admin_screens_response(request.app))
+
+
+async def admin_screens_put(request: web.Request) -> web.Response:
+    require_admin(request)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return _json_error('Request body must be valid JSON.')
+
+    existing_screens = {
+        screen['id']: screen
+        for screen in request.app[SCREEN_STATE_KEY].screens
+    }
+
+    try:
+        normalized_screens = normalize_screens_payload(
+            payload,
+            config=request.app[DISPLAY_CONFIG_KEY],
+            plugins=request.app[PLUGINS_KEY],
+            existing_screens=existing_screens,
+        )
+    except ValueError as exc:
+        return _json_error(str(exc))
+
+    request.app[SCREEN_STATE_KEY].screens = normalized_screens
+    save_screens(request.app[SCREENS_PATH_KEY], normalized_screens)
+
+    await refresh_all_plugin_screens(request.app, broadcast=False)
+    restart_plugin_refresh_tasks(request.app)
+    await broadcast_display_config(request.app)
+
+    return web.json_response(build_admin_screens_response(request.app))
+
+
+async def admin_screen_refresh(request: web.Request) -> web.Response:
+    require_admin(request)
+
+    screen_id = request.match_info['screen_id']
+    screen = get_screen_by_id(request.app, screen_id)
+    if screen is None:
+        return _json_error('Screen not found.', status=404)
+
+    if screen['type'] != 'plugin':
+        return _json_error('Only plugin screens support manual refresh.', status=400)
+
+    await refresh_plugin_screen(request.app, screen_id, broadcast=True)
+
+    refreshed_screen = get_screen_by_id(request.app, screen_id)
+    return web.json_response(
+        {
+            'screen': serialize_screen_for_admin(
+                refreshed_screen,
+                request.app[DISPLAY_CONFIG_KEY],
+                request.app[PLUGINS_KEY],
+            )
+        }
+    )
 
 
 async def websocket_handler(request: web.Request) -> web.StreamResponse:
@@ -534,6 +1097,7 @@ async def websocket_handler(request: web.Request) -> web.StreamResponse:
     await ws.prepare(request)
 
     request.app[WS_CLIENTS_KEY].add(ws)
+    sync_display_messages(request.app)
     await ws.send_json(build_config_event(request.app[DISPLAY_CONFIG_KEY]))
     await ws.send_json(build_message_event(request.app[MESSAGE_STATE_KEY]))
 
@@ -554,12 +1118,29 @@ async def favicon_handler(_: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
+async def initialize_plugin_runtime(app: web.Application) -> None:
+    app[PLUGIN_HTTP_SESSION_KEY] = ClientSession(timeout=ClientTimeout(total=20))
+    await refresh_all_plugin_screens(app, broadcast=False)
+    restart_plugin_refresh_tasks(app)
+
+
 async def cleanup_background_tasks(app: web.Application) -> None:
     override_task = app[OVERRIDE_TASK_KEY].task
     cancel_override_task(app)
     if override_task is not None:
         with suppress(asyncio.CancelledError):
             await override_task
+
+
+async def cleanup_plugin_runtime(app: web.Application) -> None:
+    cancel_plugin_refresh_tasks(app)
+    for task in list(app[SCREEN_STATE_KEY].refresh_tasks.values()):
+        with suppress(asyncio.CancelledError):
+            await task
+
+    session = app.get(PLUGIN_HTTP_SESSION_KEY)
+    if session is not None:
+        await session.close()
 
 
 async def close_websockets(app: web.Application) -> None:
@@ -595,26 +1176,48 @@ def create_app(
     *,
     admin_password: str | None = None,
     config_path: Path | None = CONFIG_PATH,
-    messages_path: Path | None = MESSAGES_PATH,
+    screens_path: Path | None = SCREENS_PATH,
+    messages_path: Path | None = LEGACY_MESSAGES_PATH,
+    plugins: dict[str, ScreenPlugin] | None = None,
 ) -> web.Application:
-    display_config = load_display_config(config_path, messages_path)
+    plugin_registry = plugins or load_plugins()
+    display_config, legacy_default_messages = load_display_settings(config_path)
+    screen_state = ScreenState(
+        screens=load_screens(
+            screens_path,
+            legacy_messages_path=messages_path,
+            legacy_default_messages=legacy_default_messages,
+            config=display_config,
+            plugins=plugin_registry,
+        )
+    )
+    display_config.default_messages = resolve_default_messages(
+        screen_state.screens,
+        display_config,
+        plugin_registry,
+    )
     message_state = MessageState(lines=[''] * display_config.rows)
     resolved_admin_password, generated_admin_password = resolve_admin_password(admin_password)
 
     app = web.Application()
     app[DISPLAY_CONFIG_KEY] = display_config
     app[MESSAGE_STATE_KEY] = message_state
+    app[SCREEN_STATE_KEY] = screen_state
     app[WS_CLIENTS_KEY] = set()
     app[ADMIN_PASSWORD_KEY] = resolved_admin_password
     app[GENERATED_ADMIN_PASSWORD_KEY] = generated_admin_password
     app[SESSION_TOKENS_KEY] = set()
     app[CONFIG_PATH_KEY] = config_path
-    app[MESSAGES_PATH_KEY] = messages_path
+    app[SCREENS_PATH_KEY] = screens_path
+    app[LEGACY_MESSAGES_PATH_KEY] = messages_path
+    app[PLUGINS_KEY] = plugin_registry
     app[OVERRIDE_TASK_KEY] = OverrideTaskState()
 
     app.on_startup.append(announce_admin_password)
+    app.on_startup.append(initialize_plugin_runtime)
     app.on_shutdown.append(close_websockets)
     app.on_cleanup.append(cleanup_background_tasks)
+    app.on_cleanup.append(cleanup_plugin_runtime)
 
     app.router.add_get('/', index_handler)
     app.router.add_get('/index.html', index_handler)
@@ -628,6 +1231,9 @@ def create_app(
     app.router.add_delete('/api/admin/session', admin_session_delete)
     app.router.add_get('/api/admin/config', admin_config_get)
     app.router.add_put('/api/admin/config', admin_config_put)
+    app.router.add_get('/api/admin/screens', admin_screens_get)
+    app.router.add_put('/api/admin/screens', admin_screens_put)
+    app.router.add_post('/api/admin/screens/{screen_id}/refresh', admin_screen_refresh)
     app.router.add_get('/ws', websocket_handler)
     app.router.add_static('/css', PROJECT_ROOT / 'css')
     app.router.add_static('/js', PROJECT_ROOT / 'js')

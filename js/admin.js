@@ -17,11 +17,20 @@ const remoteMessageInput = document.getElementById('remote-message');
 
 const screensList = document.getElementById('screens-list');
 const screensDraftNote = document.getElementById('screens-draft-note');
+const pluginCatalogNote = document.getElementById('plugin-catalog-note');
 const addScreenBtn = document.getElementById('add-screen-btn');
 const screenModal = document.getElementById('screen-modal');
 const screenModalForm = document.getElementById('screen-modal-form');
 const screenModalTitle = document.getElementById('screen-modal-title');
+const screenTypeSelect = document.getElementById('screen-type-select');
+const screenNameInput = document.getElementById('screen-name-input');
+const manualScreenFields = document.getElementById('manual-screen-fields');
+const pluginScreenFields = document.getElementById('plugin-screen-fields');
 const screenLineFields = document.getElementById('screen-line-fields');
+const pluginSelect = document.getElementById('plugin-select');
+const pluginRefreshMinutesInput = document.getElementById('plugin-refresh-minutes');
+const pluginSettingsFields = document.getElementById('plugin-settings-fields');
+const pluginDesignFields = document.getElementById('plugin-design-fields');
 const closeScreenModalBtn = document.getElementById('close-screen-modal-btn');
 const cancelScreenModalBtn = document.getElementById('cancel-screen-modal-btn');
 
@@ -31,7 +40,8 @@ const navButtons = Array.from(document.querySelectorAll('[data-page-target]'));
 const pagePanels = Array.from(document.querySelectorAll('.workspace-page'));
 
 let currentConfig = null;
-let screenDraftMessages = [];
+let availablePlugins = [];
+let screenDrafts = [];
 let screensDirty = false;
 let activePage = 'home';
 let editingScreenIndex = null;
@@ -50,6 +60,8 @@ screensList.addEventListener('dragover', handleScreenDragOver);
 screensList.addEventListener('drop', handleScreenDrop);
 screensList.addEventListener('dragend', clearDragState);
 screenModalForm.addEventListener('submit', handleSaveScreenModal);
+screenTypeSelect.addEventListener('change', handleScreenTypeChange);
+pluginSelect.addEventListener('change', handlePluginSelectionChange);
 closeScreenModalBtn.addEventListener('click', closeScreenModal);
 cancelScreenModalBtn.addEventListener('click', closeScreenModal);
 screenModal.addEventListener('cancel', () => {
@@ -62,27 +74,44 @@ for (const navButton of navButtons) {
   });
 }
 
-void loadAdminConfig();
+void loadAdminState();
 
-async function loadAdminConfig() {
+async function loadAdminState({ successMessage = 'Admin ready.', showSuccessMessage = true } = {}) {
   try {
-    const response = await fetch('/api/admin/config', { credentials: 'same-origin' });
+    const configResponse = await fetch('/api/admin/config', { credentials: 'same-origin' });
 
-    if (response.status === 401) {
+    if (configResponse.status === 401) {
       showLogin();
       return;
     }
 
-    if (!response.ok) {
-      const error = await readError(response, 'Unable to load admin configuration.');
+    if (!configResponse.ok) {
+      const error = await readError(configResponse, 'Unable to load admin configuration.');
       showLogin();
       setStatus(error, 'error');
       return;
     }
 
-    const config = await response.json();
-    showDashboard(config);
-    setStatus('Admin ready.', 'success');
+    const screensResponse = await fetch('/api/admin/screens', { credentials: 'same-origin' });
+    if (screensResponse.status === 401) {
+      showLogin();
+      return;
+    }
+
+    if (!screensResponse.ok) {
+      const error = await readError(screensResponse, 'Unable to load screen definitions.');
+      showLogin();
+      setStatus(error, 'error');
+      return;
+    }
+
+    const config = await configResponse.json();
+    const screensPayload = await screensResponse.json();
+    showDashboard(config, screensPayload);
+
+    if (showSuccessMessage) {
+      setStatus(successMessage, 'success');
+    }
   } catch {
     showLogin();
     setStatus('Unable to reach the admin API.', 'error');
@@ -107,7 +136,7 @@ async function handleLogin(event) {
     }
 
     passwordInput.value = '';
-    await loadAdminConfig();
+    await loadAdminState();
   } catch {
     setStatus('Unable to reach the admin API.', 'error');
   }
@@ -122,18 +151,36 @@ async function handleSaveSettings(event) {
   }
 
   if (screensDirty) {
-    setStatus('Save screens before changing settings so the draft list is not lost.', 'error');
+    setStatus('Save screens before changing settings so the draft screen stack is not lost.', 'error');
     return;
   }
 
-  const payload = {
-    cols: Number(colsInput.value),
-    rows: Number(rowsInput.value),
-    apiMessageDurationSeconds: Number(durationInput.value),
-    defaultMessages: cloneMessages(currentConfig.defaultMessages),
-  };
+  setStatus('Saving settings...');
 
-  await saveConfig(payload, 'Saving settings...', 'Settings saved. Display pages will refresh automatically.');
+  try {
+    const response = await fetch('/api/admin/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        cols: Number(colsInput.value),
+        rows: Number(rowsInput.value),
+        apiMessageDurationSeconds: Number(durationInput.value),
+      }),
+    });
+
+    if (!response.ok) {
+      setStatus(await readError(response, 'Save failed.'), 'error');
+      return;
+    }
+
+    await loadAdminState({
+      successMessage: 'Settings saved. Display pages will refresh automatically.',
+      showSuccessMessage: true,
+    });
+  } catch {
+    setStatus('Unable to reach the admin API.', 'error');
+  }
 }
 
 async function handleSaveScreens(event) {
@@ -144,25 +191,16 @@ async function handleSaveScreens(event) {
     return;
   }
 
-  const payload = {
-    cols: currentConfig.cols,
-    rows: currentConfig.rows,
-    apiMessageDurationSeconds: currentConfig.apiMessageDurationSeconds,
-    defaultMessages: cloneMessages(screenDraftMessages),
-  };
-
-  await saveConfig(payload, 'Saving screens...', 'Screens saved. Display pages will refresh automatically.');
-}
-
-async function saveConfig(payload, pendingMessage, successMessage) {
-  setStatus(pendingMessage);
+  setStatus('Saving screens...');
 
   try {
-    const response = await fetch('/api/admin/config', {
+    const response = await fetch('/api/admin/screens', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        screens: screenDrafts.map(serializeScreenForSave),
+      }),
     });
 
     if (!response.ok) {
@@ -170,9 +208,10 @@ async function saveConfig(payload, pendingMessage, successMessage) {
       return;
     }
 
-    const config = await response.json();
-    applyConfig(config);
-    setStatus(successMessage, 'success');
+    await loadAdminState({
+      successMessage: 'Screens saved. Display pages will refresh automatically.',
+      showSuccessMessage: true,
+    });
   } catch {
     setStatus('Unable to reach the admin API.', 'error');
   }
@@ -185,11 +224,12 @@ async function handleLogout() {
       credentials: 'same-origin',
     });
   } catch {
-    // The local session should still be cleared client-side even if the request fails.
+    // Clear local state even if the request fails.
   }
 
   currentConfig = null;
-  screenDraftMessages = [];
+  availablePlugins = [];
+  screenDrafts = [];
   screensDirty = false;
   editingScreenIndex = null;
   remoteMessageInput.value = '';
@@ -268,14 +308,19 @@ function handleScreensListClick(event) {
   }
 
   if (action === 'delete') {
-    if (screenDraftMessages.length <= 1) {
+    if (screenDrafts.length <= 1) {
       setStatus('At least one screen is required.', 'error');
       return;
     }
 
-    screenDraftMessages.splice(index, 1);
-    markScreensDirty();
+    screenDrafts.splice(index, 1);
+    markScreensDirty('Screen removed locally. Save screens to persist the new stack.');
     renderScreensList();
+    return;
+  }
+
+  if (action === 'refresh') {
+    void refreshPluginScreen(index);
   }
 }
 
@@ -333,7 +378,7 @@ function handleScreenDrop(event) {
 
   const targetBounds = targetItem.getBoundingClientRect();
   const placeAfter = event.clientY > targetBounds.top + targetBounds.height / 2;
-  const movedScreen = screenDraftMessages.splice(draggedScreenIndex, 1)[0];
+  const movedScreen = screenDrafts.splice(draggedScreenIndex, 1)[0];
   let insertIndex = targetIndex;
 
   if (draggedScreenIndex < targetIndex) {
@@ -342,9 +387,8 @@ function handleScreenDrop(event) {
     insertIndex = targetIndex + 1;
   }
 
-  screenDraftMessages.splice(insertIndex, 0, movedScreen);
-
-  markScreensDirty();
+  screenDrafts.splice(insertIndex, 0, movedScreen);
+  markScreensDirty('Screen order changed locally. Save screens to persist the new rotation.');
   renderScreensList();
 }
 
@@ -356,25 +400,100 @@ function handleSaveScreenModal(event) {
     return;
   }
 
-  const lineInputs = Array.from(screenLineFields.querySelectorAll('input'));
-  const lines = lineInputs.map((input) => input.value.trim());
-  const lastPopulatedIndex = findLastPopulatedIndex(lines);
+  const type = screenTypeSelect.value;
+  const name = screenNameInput.value.trim();
+  const id = editingScreenIndex === null ? createLocalScreenId() : screenDrafts[editingScreenIndex].id;
 
-  if (lastPopulatedIndex === -1) {
-    setStatus('Enter at least one line for the screen.', 'error');
+  if (type === 'manual') {
+    const lines = Array.from(screenLineFields.querySelectorAll('input')).map((input) => input.value.trim());
+    const lastPopulatedIndex = findLastPopulatedIndex(lines);
+
+    if (lastPopulatedIndex === -1) {
+      setStatus('Enter at least one line for the manual screen.', 'error');
+      return;
+    }
+
+    upsertScreenDraft(editingScreenIndex, {
+      id,
+      type: 'manual',
+      name,
+      enabled: true,
+      lines: lines.slice(0, lastPopulatedIndex + 1),
+    });
+    closeScreenModal();
     return;
   }
 
-  const nextScreen = lines.slice(0, lastPopulatedIndex + 1);
-  if (editingScreenIndex === null) {
-    screenDraftMessages.push(nextScreen);
-  } else {
-    screenDraftMessages[editingScreenIndex] = nextScreen;
+  const plugin = getPluginById(pluginSelect.value);
+  if (!plugin) {
+    setStatus('Select a plugin before saving the screen.', 'error');
+    return;
   }
 
-  markScreensDirty();
-  renderScreensList();
+  const refreshMinutes = Number(pluginRefreshMinutesInput.value);
+  if (!Number.isInteger(refreshMinutes) || refreshMinutes < 1) {
+    setStatus('Refresh interval must be at least 1 minute.', 'error');
+    return;
+  }
+
+  const settings = collectSchemaValues(plugin.settingsSchema, 'settings');
+  const design = collectSchemaValues(plugin.designSchema, 'design');
+
+  upsertScreenDraft(editingScreenIndex, {
+    id,
+    type: 'plugin',
+    name,
+    enabled: true,
+    pluginId: plugin.id,
+    pluginName: plugin.name,
+    refreshIntervalSeconds: refreshMinutes * 60,
+    settings,
+    design,
+    lastError: null,
+    lastRefreshedAt: null,
+  });
   closeScreenModal();
+}
+
+function handleScreenTypeChange() {
+  syncModalSections();
+}
+
+function handlePluginSelectionChange() {
+  renderPluginSchemaFields();
+}
+
+async function refreshPluginScreen(index) {
+  const screen = screenDrafts[index];
+  if (!screen || screen.type !== 'plugin') {
+    return;
+  }
+
+  if (screensDirty) {
+    setStatus('Save screens before refreshing a plugin screen so the server is using the same configuration.', 'error');
+    return;
+  }
+
+  setStatus(`Refreshing ${getScreenTitle(screen, index)}...`);
+
+  try {
+    const response = await fetch(`/api/admin/screens/${encodeURIComponent(screen.id)}/refresh`, {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+
+    if (!response.ok) {
+      setStatus(await readError(response, 'Unable to refresh the plugin screen.'), 'error');
+      return;
+    }
+
+    await loadAdminState({
+      successMessage: `${getScreenTitle(screen, index)} refreshed.`,
+      showSuccessMessage: true,
+    });
+  } catch {
+    setStatus('Unable to reach the admin API.', 'error');
+  }
 }
 
 function showLogin() {
@@ -385,33 +504,48 @@ function showLogin() {
   passwordInput.focus();
 }
 
-function showDashboard(config) {
+function showDashboard(config, screensPayload) {
   loginShell.classList.add('hidden');
   dashboardShell.classList.remove('hidden');
   applyConfig(config);
+  applyScreensPayload(screensPayload);
   switchPage(activePage);
 }
 
 function applyConfig(config) {
   currentConfig = {
-    ...config,
-    defaultMessages: cloneMessages(config.defaultMessages),
+    cols: config.cols,
+    rows: config.rows,
+    apiMessageDurationSeconds: config.apiMessageDurationSeconds,
+    defaultMessages: clone(config.defaultMessages),
   };
-  screenDraftMessages = cloneMessages(config.defaultMessages);
-  screensDirty = false;
 
   colsInput.value = String(config.cols);
   rowsInput.value = String(config.rows);
   durationInput.value = String(config.apiMessageDurationSeconds);
+}
 
+function applyScreensPayload(payload) {
+  availablePlugins = clone(payload.plugins || []);
+  screenDrafts = clone(payload.screens || []);
+  screensDirty = false;
   updateScreensDraftNote();
+  updatePluginCatalogNote();
   renderScreensList();
 }
 
 function renderScreensList() {
   screensList.replaceChildren();
 
-  for (const [index, screen] of screenDraftMessages.entries()) {
+  if (screenDrafts.length === 0) {
+    const emptyState = document.createElement('div');
+    emptyState.className = 'screen-empty';
+    emptyState.textContent = 'No screens configured yet.';
+    screensList.append(emptyState);
+    return;
+  }
+
+  for (const [index, screen] of screenDrafts.entries()) {
     const screenItem = document.createElement('article');
     screenItem.className = 'screen-item';
     screenItem.draggable = true;
@@ -420,26 +554,56 @@ function renderScreensList() {
     const header = document.createElement('div');
     header.className = 'screen-item-header';
 
+    const titleGroup = document.createElement('div');
+
     const title = document.createElement('h3');
     title.className = 'screen-item-title';
-    title.textContent = `Screen ${index + 1}`;
+    title.textContent = getScreenTitle(screen, index);
+
+    const meta = document.createElement('div');
+    meta.className = 'screen-item-meta';
+    meta.append(
+      buildScreenChip(screen.type === 'manual' ? 'Manual' : 'Plugin', screen.type === 'manual' ? '' : 'accent'),
+    );
+
+    if (screen.type === 'plugin') {
+      meta.append(buildScreenChip(screen.pluginName || screen.pluginId));
+      meta.append(buildScreenChip(`${Math.round(screen.refreshIntervalSeconds / 60)} min`));
+
+      if (screen.lastError) {
+        meta.append(buildScreenChip('Needs attention', 'error'));
+      } else if (screen.lastRefreshedAt) {
+        meta.append(buildScreenChip(`Updated ${formatTimestamp(screen.lastRefreshedAt)}`));
+      }
+    }
+
+    titleGroup.append(title, meta);
 
     const actions = document.createElement('div');
     actions.className = 'screen-item-actions';
-
     actions.append(
       buildScreenActionButton('drag-handle', 'Drag to reorder'),
+    );
+
+    if (screen.type === 'plugin') {
+      actions.append(buildScreenActionButton('', 'Refresh', 'refresh'));
+    }
+
+    actions.append(
       buildScreenActionButton('', 'Edit', 'edit'),
       buildScreenActionButton('danger', 'Delete', 'delete'),
     );
 
-    header.append(title, actions);
+    header.append(titleGroup, actions);
+
+    const copy = document.createElement('p');
+    copy.className = 'screen-item-copy';
+    copy.textContent = getScreenSummary(screen);
 
     const preview = document.createElement('div');
     preview.className = 'screen-preview';
 
-    for (let lineIndex = 0; lineIndex < currentConfig.rows; lineIndex += 1) {
-      const line = screen[lineIndex] ?? '';
+    for (const line of getScreenPreviewLines(screen)) {
       const lineElement = document.createElement('div');
       lineElement.className = 'screen-preview-line';
       if (!line) {
@@ -450,9 +614,16 @@ function renderScreensList() {
       preview.append(lineElement);
     }
 
-    screenItem.append(header, preview);
+    screenItem.append(header, copy, preview);
     screensList.append(screenItem);
   }
+}
+
+function buildScreenChip(label, extraClassName = '') {
+  const chip = document.createElement('span');
+  chip.className = ['screen-chip', extraClassName].filter(Boolean).join(' ');
+  chip.textContent = label;
+  return chip;
 }
 
 function buildScreenActionButton(extraClassName, label, action = '') {
@@ -475,27 +646,16 @@ function openScreenModal(index = null) {
   }
 
   editingScreenIndex = index;
-  screenModalTitle.textContent = index === null ? 'Add Screen' : `Edit Screen ${index + 1}`;
-  screenLineFields.replaceChildren();
+  const draft = index === null ? buildDefaultManualDraft() : clone(screenDrafts[index]);
 
-  const sourceLines = index === null ? [] : screenDraftMessages[index];
+  screenModalTitle.textContent = index === null ? 'Add Screen' : `Edit ${getScreenTitle(draft, index)}`;
+  screenTypeSelect.value = draft.type;
+  screenNameInput.value = draft.name || '';
 
-  for (let lineIndex = 0; lineIndex < currentConfig.rows; lineIndex += 1) {
-    const field = document.createElement('label');
-    field.className = 'field';
-
-    const label = document.createElement('span');
-    label.textContent = `Line ${lineIndex + 1}`;
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.maxLength = currentConfig.cols;
-    input.value = sourceLines?.[lineIndex] ?? '';
-    input.placeholder = `Up to ${currentConfig.cols} characters`;
-
-    field.append(label, input);
-    screenLineFields.append(field);
-  }
+  renderManualFields(draft.type === 'manual' ? draft.lines : []);
+  populatePluginSelect(draft.pluginId);
+  populatePluginEditor(draft);
+  syncModalSections();
 
   if (typeof screenModal.showModal === 'function') {
     screenModal.showModal();
@@ -503,7 +663,7 @@ function openScreenModal(index = null) {
     screenModal.setAttribute('open', 'open');
   }
 
-  const firstInput = screenLineFields.querySelector('input');
+  const firstInput = screenModal.querySelector('input, select, textarea');
   if (firstInput) {
     firstInput.focus();
   }
@@ -518,6 +678,176 @@ function closeScreenModal() {
   }
 
   screenModal.removeAttribute('open');
+}
+
+function populatePluginSelect(selectedPluginId = '') {
+  pluginSelect.replaceChildren();
+
+  for (const plugin of availablePlugins) {
+    const option = document.createElement('option');
+    option.value = plugin.id;
+    option.textContent = plugin.name;
+    pluginSelect.append(option);
+  }
+
+  if (selectedPluginId && getPluginById(selectedPluginId)) {
+    pluginSelect.value = selectedPluginId;
+    return;
+  }
+
+  if (availablePlugins[0]) {
+    pluginSelect.value = availablePlugins[0].id;
+  }
+}
+
+function populatePluginEditor(draft) {
+  const plugin = getPluginById(draft.pluginId || pluginSelect.value);
+  if (!plugin) {
+    pluginRefreshMinutesInput.value = '60';
+    pluginSettingsFields.replaceChildren();
+    pluginDesignFields.replaceChildren();
+    return;
+  }
+
+  pluginSelect.value = plugin.id;
+  pluginRefreshMinutesInput.value = String(Math.max(1, Math.round((draft.refreshIntervalSeconds || plugin.defaultRefreshIntervalSeconds) / 60)));
+  renderPluginSchemaFields(draft.settings || {}, draft.design || {});
+}
+
+function renderPluginSchemaFields(settingsValues = null, designValues = null) {
+  const plugin = getPluginById(pluginSelect.value);
+
+  pluginSettingsFields.replaceChildren();
+  pluginDesignFields.replaceChildren();
+
+  if (!plugin) {
+    return;
+  }
+
+  for (const field of plugin.settingsSchema) {
+    pluginSettingsFields.append(buildSchemaField(field, 'settings', settingsValues));
+  }
+
+  for (const field of plugin.designSchema) {
+    pluginDesignFields.append(buildSchemaField(field, 'design', designValues));
+  }
+}
+
+function buildSchemaField(field, sectionName, values) {
+  const wrapper = document.createElement('label');
+  wrapper.className = 'field';
+
+  const label = document.createElement('span');
+  label.textContent = field.label;
+
+  const value = values && field.name in values ? values[field.name] : field.default;
+  let control;
+
+  if (field.type === 'select') {
+    control = document.createElement('select');
+    for (const option of field.options || []) {
+      const optionEl = document.createElement('option');
+      optionEl.value = option.value;
+      optionEl.textContent = option.label;
+      control.append(optionEl);
+    }
+    control.value = value ?? '';
+  } else if (field.type === 'checkbox') {
+    control = document.createElement('input');
+    control.type = 'checkbox';
+    control.checked = Boolean(value);
+  } else if (field.type === 'number') {
+    control = document.createElement('input');
+    control.type = 'number';
+    control.value = value ?? '';
+  } else {
+    control = document.createElement('input');
+    control.type = 'text';
+    control.value = value ?? '';
+    control.placeholder = field.placeholder || '';
+  }
+
+  control.dataset.schemaSection = sectionName;
+  control.dataset.fieldName = field.name;
+  wrapper.append(label, control);
+
+  if (field.helpText) {
+    const help = document.createElement('p');
+    help.className = 'helper-copy';
+    help.textContent = field.helpText;
+    wrapper.append(help);
+  }
+
+  return wrapper;
+}
+
+function syncModalSections() {
+  const isPlugin = screenTypeSelect.value === 'plugin';
+  manualScreenFields.classList.toggle('hidden', isPlugin);
+  pluginScreenFields.classList.toggle('hidden', !isPlugin);
+}
+
+function renderManualFields(lines = []) {
+  screenLineFields.replaceChildren();
+
+  for (let lineIndex = 0; lineIndex < currentConfig.rows; lineIndex += 1) {
+    const field = document.createElement('label');
+    field.className = 'field';
+
+    const label = document.createElement('span');
+    label.textContent = `Line ${lineIndex + 1}`;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = currentConfig.cols;
+    input.value = lines[lineIndex] ?? '';
+    input.placeholder = `Up to ${currentConfig.cols} characters`;
+
+    field.append(label, input);
+    screenLineFields.append(field);
+  }
+}
+
+function collectSchemaValues(schema, sectionName) {
+  const values = {};
+
+  for (const field of schema) {
+    const control = screenModal.querySelector(`[data-schema-section="${sectionName}"][data-field-name="${field.name}"]`);
+    if (!control) {
+      continue;
+    }
+
+    if (field.type === 'checkbox') {
+      values[field.name] = Boolean(control.checked);
+      continue;
+    }
+
+    if (field.type === 'number') {
+      values[field.name] = Number(control.value);
+      continue;
+    }
+
+    values[field.name] = String(control.value || '').trim();
+  }
+
+  return values;
+}
+
+function upsertScreenDraft(index, screen) {
+  const nextScreen = {
+    ...screen,
+    previewLines: buildLocalPreviewLines(screen),
+  };
+
+  if (index === null) {
+    screenDrafts.push(nextScreen);
+    markScreensDirty(`${getScreenTitle(nextScreen, screenDrafts.length - 1)} added locally. Save screens to persist it.`);
+  } else {
+    screenDrafts[index] = nextScreen;
+    markScreensDirty(`${getScreenTitle(nextScreen, index)} updated locally. Save screens to persist it.`);
+  }
+
+  renderScreensList();
 }
 
 function switchPage(pageId) {
@@ -541,14 +871,26 @@ function switchPage(pageId) {
   }
 }
 
-function markScreensDirty() {
+function markScreensDirty(message) {
   screensDirty = true;
   updateScreensDraftNote();
-  setStatus('Screens changed locally. Save screens to persist them.');
+  if (message) {
+    setStatus(message);
+  }
 }
 
 function updateScreensDraftNote() {
   screensDraftNote.classList.toggle('hidden', !screensDirty);
+}
+
+function updatePluginCatalogNote() {
+  if (availablePlugins.length === 0) {
+    pluginCatalogNote.textContent = 'No plugins are installed yet.';
+    return;
+  }
+
+  const names = availablePlugins.map((plugin) => plugin.name).join(', ');
+  pluginCatalogNote.textContent = `${availablePlugins.length} plugin${availablePlugins.length === 1 ? '' : 's'} available: ${names}.`;
 }
 
 function clearDragIndicators() {
@@ -566,8 +908,86 @@ function clearDragState() {
   }
 }
 
-function cloneMessages(messages) {
-  return messages.map((message) => [...message]);
+function getScreenTitle(screen, index) {
+  return screen.name || screen.pluginName || `Screen ${index + 1}`;
+}
+
+function getScreenSummary(screen) {
+  if (screen.type === 'manual') {
+    return 'Manual split-flap message.';
+  }
+
+  const city = screen.settings?.city || 'Unconfigured city';
+  const country = screen.settings?.country || 'country';
+  return `${screen.pluginName || screen.pluginId} for ${city}, ${country}.`;
+}
+
+function getScreenPreviewLines(screen) {
+  const lines = Array.isArray(screen.previewLines) && screen.previewLines.length > 0
+    ? screen.previewLines
+    : buildLocalPreviewLines(screen);
+  return padLocalLines(lines);
+}
+
+function buildLocalPreviewLines(screen) {
+  if (screen.type === 'manual') {
+    return padLocalLines(screen.lines || []);
+  }
+
+  const title = (screen.design?.title || screen.settings?.city || screen.pluginName || 'PLUGIN').trim().toUpperCase();
+  const detail = screen.lastError
+    ? screen.lastError.toUpperCase()
+    : 'PLUGIN SCREEN';
+  return padLocalLines([
+    '',
+    title.slice(0, currentConfig.cols),
+    detail.slice(0, currentConfig.cols),
+  ]);
+}
+
+function padLocalLines(lines) {
+  const normalized = Array.isArray(lines) ? [...lines] : [];
+  while (normalized.length < currentConfig.rows) {
+    normalized.push('');
+  }
+  return normalized.slice(0, currentConfig.rows);
+}
+
+function serializeScreenForSave(screen) {
+  if (screen.type === 'manual') {
+    return {
+      id: screen.id,
+      type: 'manual',
+      name: screen.name || '',
+      enabled: true,
+      lines: screen.lines,
+    };
+  }
+
+  return {
+    id: screen.id,
+    type: 'plugin',
+    name: screen.name || '',
+    enabled: true,
+    pluginId: screen.pluginId,
+    refreshIntervalSeconds: screen.refreshIntervalSeconds,
+    settings: screen.settings || {},
+    design: screen.design || {},
+  };
+}
+
+function buildDefaultManualDraft() {
+  return {
+    id: createLocalScreenId(),
+    type: 'manual',
+    name: '',
+    enabled: true,
+    lines: [],
+  };
+}
+
+function getPluginById(pluginId) {
+  return availablePlugins.find((plugin) => plugin.id === pluginId) || null;
 }
 
 function findLastPopulatedIndex(lines) {
@@ -578,6 +998,30 @@ function findLastPopulatedIndex(lines) {
   }
 
   return -1;
+}
+
+function formatTimestamp(timestamp) {
+  try {
+    return new Date(timestamp).toLocaleString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      month: 'short',
+      day: 'numeric',
+    });
+  } catch {
+    return timestamp;
+  }
+}
+
+function createLocalScreenId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+  return `screen-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function setStatus(message, kind = '') {

@@ -6,18 +6,52 @@ from pathlib import Path
 
 from aiohttp.test_utils import AioHTTPTestCase
 
-from server import DISPLAY_CONFIG_KEY, create_app
+from plugins.base import PluginField, PluginManifest, PluginRefreshResult, ScreenPlugin
+from server import DISPLAY_CONFIG_KEY, SCREENS_PATH, create_app
+
+
+class FakeForecastPlugin(ScreenPlugin):
+    def __init__(self):
+        self.refresh_count = 0
+        self.manifest = PluginManifest(
+            plugin_id='fake_forecast',
+            name='Fake Forecast',
+            description='Test plugin.',
+            default_refresh_interval_seconds=1,
+            settings_schema=(
+                PluginField(name='city', label='City', field_type='text', required=True),
+                PluginField(name='country', label='Country', field_type='text', required=True),
+            ),
+            design_schema=(
+                PluginField(name='title', label='Title', field_type='text', default=''),
+            ),
+        )
+
+    async def refresh(self, *, settings, design, context, http_session):
+        self.refresh_count += 1
+        title = (design.get('title') or settings['city']).upper()
+        return PluginRefreshResult(
+            lines=[
+                title[: context.cols],
+                f"RUN {self.refresh_count}",
+                settings['country'].upper(),
+            ]
+        )
 
 
 class FlipOffServerTests(AioHTTPTestCase):
     async def get_application(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.config_path = Path(self.temp_dir.name) / 'flipoff.config.json'
-        self.messages_path = Path(self.temp_dir.name) / 'flipoff.messages.json'
+        self.screens_path = Path(self.temp_dir.name) / 'flipoff.screens.json'
+        self.legacy_messages_path = Path(self.temp_dir.name) / 'flipoff.messages.json'
+        self.fake_plugin = FakeForecastPlugin()
         return create_app(
             admin_password='secret-password',
             config_path=self.config_path,
-            messages_path=self.messages_path,
+            screens_path=self.screens_path,
+            messages_path=self.legacy_messages_path,
+            plugins={self.fake_plugin.manifest.plugin_id: self.fake_plugin},
         )
 
     def tearDown(self):
@@ -91,7 +125,7 @@ class FlipOffServerTests(AioHTTPTestCase):
         self.assertEqual(response.status, 400)
 
         payload = await response.json()
-        self.assertEqual(payload['error'], 'Line 1 exceeds 18 characters.')
+        self.assertEqual(payload['error'], 'lines line 1 exceeds 18 characters.')
 
     async def test_post_rejects_message_that_cannot_fit(self):
         response = await self.client.post(
@@ -120,7 +154,6 @@ class FlipOffServerTests(AioHTTPTestCase):
                 'cols': 18,
                 'rows': 5,
                 'apiMessageDurationSeconds': 1,
-                'defaultMessages': [['', 'HELLO', '', '', '']],
             },
         )
         self.assertEqual(response.status, 200)
@@ -138,69 +171,144 @@ class FlipOffServerTests(AioHTTPTestCase):
         response = await self.client.get('/api/admin/config')
         self.assertEqual(response.status, 401)
 
+    async def test_admin_screens_requires_authentication(self):
+        response = await self.client.get('/api/admin/screens')
+        self.assertEqual(response.status, 401)
+
     async def test_admin_config_update_changes_public_config(self):
         await self.authenticate()
         response = await self.client.put(
             '/api/admin/config',
             json={
-                'cols': 16,
-                'rows': 4,
+                'cols': 20,
+                'rows': 5,
                 'apiMessageDurationSeconds': 45,
-                'defaultMessages': [
-                    ['welcome home', 'simon'],
-                    ['server room', 'all green'],
-                ],
             },
         )
         self.assertEqual(response.status, 200)
 
         payload = await response.json()
-        self.assertEqual(payload['cols'], 16)
-        self.assertEqual(payload['rows'], 4)
+        self.assertEqual(payload['cols'], 20)
+        self.assertEqual(payload['rows'], 5)
         self.assertEqual(payload['apiMessageDurationSeconds'], 45)
-        self.assertEqual(payload['defaultMessages'][0], ['WELCOME HOME', 'SIMON', '', ''])
 
         public_config = await self.client.get('/api/config')
         public_payload = await public_config.json()
-        self.assertEqual(public_payload['cols'], 16)
-        self.assertEqual(public_payload['rows'], 4)
+        self.assertEqual(public_payload['cols'], 20)
+        self.assertEqual(public_payload['rows'], 5)
+        self.assertEqual(len(public_payload['defaultMessages'][0]), 5)
 
-    async def test_admin_config_update_persists_messages_to_dedicated_file(self):
+    async def test_admin_screens_update_changes_public_config_with_manual_screen(self):
         await self.authenticate()
         response = await self.client.put(
-            '/api/admin/config',
+            '/api/admin/screens',
             json={
-                'cols': 18,
-                'rows': 5,
-                'apiMessageDurationSeconds': 30,
-                'defaultMessages': [
-                    ['welcome home', 'simon'],
-                    ['maintenance', 'window'],
-                ],
+                'screens': [
+                    {
+                        'type': 'manual',
+                        'name': 'Welcome',
+                        'enabled': True,
+                        'lines': ['welcome home', 'simon'],
+                    }
+                ]
             },
         )
         self.assertEqual(response.status, 200)
-        self.assertTrue(self.messages_path.exists())
+        self.assertTrue(self.screens_path.exists())
+
+        payload = await response.json()
+        self.assertEqual(payload['screens'][0]['name'], 'Welcome')
+        self.assertEqual(payload['screens'][0]['previewLines'][0], 'WELCOME HOME')
+
+        public_config = await self.client.get('/api/config')
+        public_payload = await public_config.json()
+        self.assertEqual(public_payload['defaultMessages'][0], ['WELCOME HOME', 'SIMON', '', '', ''])
         self.assertEqual(
-            json.loads(self.messages_path.read_text(encoding='utf-8')),
-            [
-                ['WELCOME HOME', 'SIMON'],
-                ['MAINTENANCE', 'WINDOW'],
-            ],
+            json.loads(self.screens_path.read_text(encoding='utf-8'))['screens'][0]['lines'],
+            ['WELCOME HOME', 'SIMON'],
         )
 
-        reloaded_app = create_app(
-            admin_password='secret-password',
-            config_path=self.config_path,
-            messages_path=self.messages_path,
+    async def test_admin_screens_update_adds_plugin_screen_and_refreshes_cache(self):
+        await self.authenticate()
+        response = await self.client.put(
+            '/api/admin/screens',
+            json={
+                'screens': [
+                    {
+                        'type': 'plugin',
+                        'name': 'London Forecast',
+                        'enabled': True,
+                        'pluginId': 'fake_forecast',
+                        'refreshIntervalSeconds': 60,
+                        'settings': {'city': 'London', 'country': 'GB'},
+                        'design': {'title': 'LONDON 3 DAY'},
+                    }
+                ]
+            },
         )
-        self.assertEqual(
-            reloaded_app[DISPLAY_CONFIG_KEY].default_messages,
-            [
-                ['WELCOME HOME', 'SIMON', '', '', ''],
-                ['MAINTENANCE', 'WINDOW', '', '', ''],
-            ],
+        self.assertEqual(response.status, 200)
+
+        payload = await response.json()
+        self.assertEqual(payload['screens'][0]['pluginId'], 'fake_forecast')
+        self.assertEqual(payload['screens'][0]['previewLines'][0], 'LONDON 3 DAY')
+        self.assertEqual(payload['screens'][0]['previewLines'][1], 'RUN 1')
+
+        public_config = await self.client.get('/api/config')
+        public_payload = await public_config.json()
+        self.assertEqual(public_payload['defaultMessages'][0][0], 'LONDON 3 DAY')
+        self.assertEqual(public_payload['defaultMessages'][0][1], 'RUN 1')
+
+    async def test_plugin_screen_refresh_endpoint_updates_preview(self):
+        await self.authenticate()
+        create_response = await self.client.put(
+            '/api/admin/screens',
+            json={
+                'screens': [
+                    {
+                        'type': 'plugin',
+                        'name': 'Weather',
+                        'enabled': True,
+                        'pluginId': 'fake_forecast',
+                        'refreshIntervalSeconds': 60,
+                        'settings': {'city': 'Paris', 'country': 'FR'},
+                        'design': {'title': 'PARIS'},
+                    }
+                ]
+            },
         )
+        self.assertEqual(create_response.status, 200)
+        created_payload = await create_response.json()
+        screen_id = created_payload['screens'][0]['id']
+
+        refresh_response = await self.client.post(f'/api/admin/screens/{screen_id}/refresh')
+        self.assertEqual(refresh_response.status, 200)
+        refresh_payload = await refresh_response.json()
+        self.assertEqual(refresh_payload['screen']['previewLines'][1], 'RUN 2')
+
+    async def test_plugin_screen_scheduler_refreshes_on_interval(self):
+        await self.authenticate()
+        response = await self.client.put(
+            '/api/admin/screens',
+            json={
+                'screens': [
+                    {
+                        'type': 'plugin',
+                        'name': 'Ticker',
+                        'enabled': True,
+                        'pluginId': 'fake_forecast',
+                        'refreshIntervalSeconds': 1,
+                        'settings': {'city': 'Rome', 'country': 'IT'},
+                        'design': {'title': 'ROME'},
+                    }
+                ]
+            },
+        )
+        self.assertEqual(response.status, 200)
+
+        await asyncio.sleep(1.2)
+        public_config = await self.client.get('/api/config')
+        public_payload = await public_config.json()
+        self.assertEqual(public_payload['defaultMessages'][0][1], 'RUN 2')
 
     async def test_delete_message_clears_override(self):
         await self.client.post('/api/message', json={'lines': ['remote message']})
@@ -251,18 +359,22 @@ class FlipOffServerTests(AioHTTPTestCase):
 
         await self.authenticate()
         await self.client.put(
-            '/api/admin/config',
+            '/api/admin/screens',
             json={
-                'cols': 12,
-                'rows': 3,
-                'apiMessageDurationSeconds': 20,
-                'defaultMessages': [['hello', 'world']],
+                'screens': [
+                    {
+                        'type': 'manual',
+                        'name': 'Short',
+                        'enabled': True,
+                        'lines': ['hello', 'world'],
+                    }
+                ]
             },
         )
 
         updated_config_event = await ws.receive_json()
         self.assertEqual(updated_config_event['type'], 'config_state')
-        self.assertEqual(updated_config_event['payload']['cols'], 12)
+        self.assertEqual(updated_config_event['payload']['defaultMessages'][0], ['HELLO', 'WORLD', '', '', ''])
 
         await ws.close()
 

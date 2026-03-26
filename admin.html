@@ -79,7 +79,7 @@
             class="nav-link"
             data-page-target="screens"
             data-page-title="Screens"
-            data-page-copy="Edit the saved default message JSON that drives the fallback rotation."
+            data-page-copy="Manage the rotation stack, including manual screens and installed plugin screens."
           >
             <span class="nav-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false">
@@ -149,18 +149,19 @@
             <form id="screens-form" class="stack">
               <div class="screens-toolbar">
                 <div>
-                  <p class="section-kicker">Default Messages</p>
-                  <p class="helper-copy">Reorder the fallback messages, edit them in place, or add a new one with the modal.</p>
+                  <p class="section-kicker">Screen Stack</p>
+                  <p class="helper-copy">Mix manual screens with plugin-backed screens, then reorder the final rotation.</p>
                 </div>
                 <button type="button" id="add-screen-btn" class="ghost-btn">Add Screen</button>
               </div>
 
               <p id="screens-draft-note" class="helper-copy hidden">You have unsaved screen changes.</p>
+              <p id="plugin-catalog-note" class="helper-copy"></p>
 
               <div id="screens-list" class="screens-list" aria-live="polite"></div>
 
               <div class="help-block">
-                <p>Each screen maps to one rotating fallback message. Drag cards to change rotation order before saving.</p>
+                <p>Plugin screens refresh on their own schedule and can also be refreshed manually from the screen list.</p>
               </div>
 
               <button type="submit" class="primary-btn">Save Screens</button>
@@ -212,8 +213,49 @@
         <button type="button" id="close-screen-modal-btn" class="ghost-btn">Close</button>
       </div>
 
-      <div id="screen-line-fields" class="screen-line-fields"></div>
-      <p class="helper-copy">Blank lines are allowed between populated lines, but at least one line must contain text.</p>
+      <div class="screen-modal-grid">
+        <label class="field">
+          <span>Screen Type</span>
+          <select id="screen-type-select">
+            <option value="manual">Manual</option>
+            <option value="plugin">Plugin</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Name</span>
+          <input id="screen-name-input" type="text" placeholder="Optional internal label">
+        </label>
+      </div>
+
+      <div id="manual-screen-fields" class="stack">
+        <div id="screen-line-fields" class="screen-line-fields"></div>
+        <p class="helper-copy">Blank lines are allowed between populated lines, but at least one line must contain text.</p>
+      </div>
+
+      <div id="plugin-screen-fields" class="stack hidden">
+        <div class="screen-modal-grid">
+          <label class="field">
+            <span>Plugin</span>
+            <select id="plugin-select"></select>
+          </label>
+
+          <label class="field">
+            <span>Refresh Interval (minutes)</span>
+            <input id="plugin-refresh-minutes" type="number" min="1" step="1" value="60">
+          </label>
+        </div>
+
+        <div>
+          <p class="section-kicker">Plugin Settings</p>
+          <div id="plugin-settings-fields" class="screen-line-fields"></div>
+        </div>
+
+        <div>
+          <p class="section-kicker">Screen Design</p>
+          <div id="plugin-design-fields" class="screen-line-fields"></div>
+        </div>
+      </div>
 
       <div class="screen-modal-actions">
         <button type="button" id="cancel-screen-modal-btn" class="ghost-btn">Cancel</button>
