@@ -239,8 +239,8 @@ def normalize_runtime_settings_payload(payload: Any) -> tuple[int, int, int, int
     if not isinstance(payload, dict):
         raise ValueError('Request body must be a JSON object.')
 
-    cols = _coerce_int(payload.get('cols'), 'cols', 6, 40)
-    rows = _coerce_int(payload.get('rows'), 'rows', 1, 10)
+    cols = _coerce_int(payload.get('cols'), 'cols', 6, 256)
+    rows = _coerce_int(payload.get('rows'), 'rows', 1, 128)
     message_duration_seconds = _coerce_int(
         payload.get('messageDurationSeconds', DEFAULT_MESSAGE_DURATION_SECONDS),
         'messageDurationSeconds',
