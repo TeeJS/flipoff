@@ -1,13 +1,13 @@
 import { Tile } from './Tile.js';
 import {
-  GRID_COLS, GRID_ROWS, STAGGER_DELAY, SCRAMBLE_DURATION,
+  DEFAULT_GRID_COLS, DEFAULT_GRID_ROWS, STAGGER_DELAY,
   TOTAL_TRANSITION, ACCENT_COLORS
 } from './constants.js';
 
 export class Board {
-  constructor(containerEl, soundEngine) {
-    this.cols = GRID_COLS;
-    this.rows = GRID_ROWS;
+  constructor(containerEl, soundEngine, config = {}) {
+    this.cols = Number(config.cols) || DEFAULT_GRID_COLS;
+    this.rows = Number(config.rows) || DEFAULT_GRID_ROWS;
     this.soundEngine = soundEngine;
     this.isTransitioning = false;
     this.pendingLines = null;

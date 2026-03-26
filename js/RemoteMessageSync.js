@@ -1,26 +1,17 @@
 export class RemoteMessageSync {
-  constructor(onStateChange) {
-    this.onStateChange = onStateChange;
+  constructor(onEvent) {
+    this.onEvent = onEvent;
     this.ws = null;
     this.reconnectTimer = null;
     this.isStopped = false;
   }
 
-  async fetchInitialState() {
-    if (!this._canUseNetwork()) {
-      return null;
-    }
+  fetchConfig() {
+    return this._fetchJson('/api/config');
+  }
 
-    try {
-      const response = await fetch('/api/message');
-      if (!response.ok) {
-        return null;
-      }
-
-      return await response.json();
-    } catch {
-      return null;
-    }
+  fetchMessageState() {
+    return this._fetchJson('/api/message');
   }
 
   connect() {
@@ -53,8 +44,8 @@ export class RemoteMessageSync {
   _handleMessage(event) {
     try {
       const data = JSON.parse(event.data);
-      if (data.type === 'message_state' && data.payload) {
-        this.onStateChange(data.payload);
+      if (data && data.type && data.payload) {
+        this.onEvent(data);
       }
     } catch {
       // Ignore malformed messages and wait for the next valid update.
@@ -79,6 +70,23 @@ export class RemoteMessageSync {
 
   _canUseNetwork() {
     return window.location.protocol === 'http:' || window.location.protocol === 'https:';
+  }
+
+  async _fetchJson(path) {
+    if (!this._canUseNetwork()) {
+      return null;
+    }
+
+    try {
+      const response = await fetch(path);
+      if (!response.ok) {
+        return null;
+      }
+
+      return await response.json();
+    } catch {
+      return null;
+    }
   }
 
   _getWebSocketUrl() {

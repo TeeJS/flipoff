@@ -1,4 +1,7 @@
+import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 
 from aiohttp.test_utils import AioHTTPTestCase
 
@@ -7,7 +10,30 @@ from server import create_app
 
 class FlipOffServerTests(AioHTTPTestCase):
     async def get_application(self):
-        return create_app()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.config_path = Path(self.temp_dir.name) / 'flipoff.config.json'
+        return create_app(admin_password='secret-password', config_path=self.config_path)
+
+    def tearDown(self):
+        super().tearDown()
+        self.temp_dir.cleanup()
+
+    async def authenticate(self):
+        response = await self.client.post(
+            '/api/admin/session',
+            json={'password': 'secret-password'},
+        )
+        self.assertEqual(response.status, 200)
+
+    async def test_get_public_config_returns_defaults(self):
+        response = await self.client.get('/api/config')
+        self.assertEqual(response.status, 200)
+
+        payload = await response.json()
+        self.assertEqual(payload['cols'], 18)
+        self.assertEqual(payload['rows'], 5)
+        self.assertEqual(payload['apiMessageDurationSeconds'], 30)
+        self.assertGreater(len(payload['defaultMessages']), 0)
 
     async def test_get_message_returns_default_state(self):
         response = await self.client.get('/api/message')
@@ -80,6 +106,59 @@ class FlipOffServerTests(AioHTTPTestCase):
             "'message' must fit within 5 lines of 18 characters.",
         )
 
+    async def test_api_message_expires_back_to_default_rotation(self):
+        await self.authenticate()
+        response = await self.client.put(
+            '/api/admin/config',
+            json={
+                'cols': 18,
+                'rows': 5,
+                'apiMessageDurationSeconds': 1,
+                'defaultMessages': [['', 'HELLO', '', '', '']],
+            },
+        )
+        self.assertEqual(response.status, 200)
+
+        post_response = await self.client.post('/api/message', json={'lines': ['timed override']})
+        self.assertEqual(post_response.status, 200)
+
+        await asyncio.sleep(1.2)
+        current_state = await self.client.get('/api/message')
+        payload = await current_state.json()
+        self.assertFalse(payload['hasOverride'])
+        self.assertEqual(payload['lines'], ['', '', '', '', ''])
+
+    async def test_admin_config_requires_authentication(self):
+        response = await self.client.get('/api/admin/config')
+        self.assertEqual(response.status, 401)
+
+    async def test_admin_config_update_changes_public_config(self):
+        await self.authenticate()
+        response = await self.client.put(
+            '/api/admin/config',
+            json={
+                'cols': 16,
+                'rows': 4,
+                'apiMessageDurationSeconds': 45,
+                'defaultMessages': [
+                    ['welcome home', 'simon'],
+                    ['server room', 'all green'],
+                ],
+            },
+        )
+        self.assertEqual(response.status, 200)
+
+        payload = await response.json()
+        self.assertEqual(payload['cols'], 16)
+        self.assertEqual(payload['rows'], 4)
+        self.assertEqual(payload['apiMessageDurationSeconds'], 45)
+        self.assertEqual(payload['defaultMessages'][0], ['WELCOME HOME', 'SIMON', '', ''])
+
+        public_config = await self.client.get('/api/config')
+        public_payload = await public_config.json()
+        self.assertEqual(public_payload['cols'], 16)
+        self.assertEqual(public_payload['rows'], 4)
+
     async def test_delete_message_clears_override(self):
         await self.client.post('/api/message', json={'lines': ['remote message']})
 
@@ -96,12 +175,16 @@ class FlipOffServerTests(AioHTTPTestCase):
             },
         )
 
-    async def test_websocket_receives_create_and_clear_events(self):
+    async def test_websocket_receives_config_message_and_clear_events(self):
         ws = await self.client.ws_connect('/ws')
 
-        initial_event = await ws.receive_json()
-        self.assertEqual(initial_event['type'], 'message_state')
-        self.assertFalse(initial_event['payload']['hasOverride'])
+        config_event = await ws.receive_json()
+        self.assertEqual(config_event['type'], 'config_state')
+        self.assertEqual(config_event['payload']['cols'], 18)
+
+        initial_message_event = await ws.receive_json()
+        self.assertEqual(initial_message_event['type'], 'message_state')
+        self.assertFalse(initial_message_event['payload']['hasOverride'])
 
         create_response = await self.client.post(
             '/api/message',
@@ -122,6 +205,21 @@ class FlipOffServerTests(AioHTTPTestCase):
         cleared_event = await ws.receive_json()
         self.assertFalse(cleared_event['payload']['hasOverride'])
         self.assertEqual(cleared_event['payload']['lines'], ['', '', '', '', ''])
+
+        await self.authenticate()
+        await self.client.put(
+            '/api/admin/config',
+            json={
+                'cols': 12,
+                'rows': 3,
+                'apiMessageDurationSeconds': 20,
+                'defaultMessages': [['hello', 'world']],
+            },
+        )
+
+        updated_config_event = await ws.receive_json()
+        self.assertEqual(updated_config_event['type'], 'config_state')
+        self.assertEqual(updated_config_event['payload']['cols'], 12)
 
         await ws.close()
 

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#111111">
+  <title>FlipOff Admin</title>
+  <link rel="stylesheet" href="css/reset.css">
+  <link rel="stylesheet" href="css/admin.css">
+</head>
+<body>
+  <main class="admin-shell">
+    <section class="admin-card admin-intro">
+      <p class="eyebrow">FlipOff Control</p>
+      <h1>Runtime display configuration</h1>
+      <p class="lede">
+        Update the board geometry, edit the rotating default messages, and control how long API overrides stay live before the display falls back to the default rotation.
+      </p>
+    </section>
+
+    <section class="admin-card" id="login-panel">
+      <h2>Admin Login</h2>
+      <form id="login-form" class="stack">
+        <label class="field">
+          <span>Password</span>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="primary-btn">Unlock Admin</button>
+      </form>
+    </section>
+
+    <section class="admin-card hidden" id="config-panel">
+      <div class="panel-header">
+        <div>
+          <h2>Display Settings</h2>
+          <p class="panel-copy">Changes save immediately to the server config and open display pages reload themselves to pick them up.</p>
+        </div>
+        <button type="button" id="logout-btn" class="ghost-btn">Log out</button>
+      </div>
+
+      <form id="config-form" class="stack">
+        <div class="grid">
+          <label class="field">
+            <span>Columns</span>
+            <input id="cols" name="cols" type="number" min="6" max="40" required>
+          </label>
+
+          <label class="field">
+            <span>Rows</span>
+            <input id="rows" name="rows" type="number" min="1" max="10" required>
+          </label>
+
+          <label class="field">
+            <span>API message duration (seconds)</span>
+            <input id="api-duration" name="api-duration" type="number" min="1" max="86400" required>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Default messages JSON</span>
+          <textarea id="default-messages" rows="16" spellcheck="false" required></textarea>
+        </label>
+
+        <div class="help-block">
+          <p>Use a JSON array of message arrays. Each message must be an array of lines.</p>
+          <pre>[
+  ["", "WELCOME HOME", "SIMON", "", ""],
+  ["", "SERVER STATUS", "ALL SYSTEMS GO", "", ""]
+]</pre>
+        </div>
+
+        <button type="submit" class="primary-btn">Save Configuration</button>
+      </form>
+    </section>
+
+    <section class="admin-card hidden" id="message-panel">
+      <div class="panel-header">
+        <div>
+          <h2>Remote Message</h2>
+          <p class="panel-copy">Send a temporary API override directly from the admin area. The server will wrap and center the message, then clear it automatically after the configured duration.</p>
+        </div>
+      </div>
+
+      <form id="message-form" class="stack">
+        <label class="field">
+          <span>Message</span>
+          <textarea id="remote-message" rows="5" spellcheck="false" placeholder="Server driven updates are live"></textarea>
+        </label>
+
+        <div class="action-row">
+          <button type="submit" class="primary-btn">Send Message</button>
+          <button type="button" id="clear-message-btn" class="ghost-btn">Clear Active Override</button>
+        </div>
+      </form>
+    </section>
+
+    <p id="status-message" class="status-message" aria-live="polite"></p>
+  </main>
+
+  <script type="module" src="js/admin.js"></script>
+</body>
+</html>

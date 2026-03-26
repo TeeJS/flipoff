@@ -17,6 +17,7 @@ No accounts. No subscriptions. No $199 fee. Just open `index.html` and go.
 - Auto-rotating inspirational quotes
 - REST API for remotely updating the board
 - WebSocket sync for instant updates across connected displays
+- Password-protected `/admin` runtime configuration panel
 - Fullscreen TV mode (press `F`)
 - Keyboard controls for manual navigation
 - Responsive from mobile to 4K displays
@@ -33,9 +34,12 @@ No accounts. No subscriptions. No $199 fee. Just open `index.html` and go.
 
 ```bash
 python3 -m pip install -r requirements.txt
+export FLIPOFF_ADMIN_PASSWORD='choose-a-strong-password'
 python3 server.py
 # Then open http://localhost:8080
 ```
+
+If `FLIPOFF_ADMIN_PASSWORD` is not set, the server generates a random admin password at startup and prints it to the console.
 
 ## Keyboard Shortcuts
 
@@ -54,9 +58,11 @@ Each tile on the board is an independent element that can animate through a scra
 
 The sound is a single recorded audio clip of a real split-flap transition, played once per message change to perfectly sync with the visual animation.
 
-The Python server keeps the current remote message in memory. Clients can update it through a REST API, and every open board stays synchronized through a WebSocket connection.
+The Python server keeps the current remote message and display configuration in memory. Clients can update the board through a REST API, and every open display stays synchronized through a WebSocket connection.
 
-The board currently uses an 18-character width. `message` payloads wrap on whole words, then the wrapped block is centered vertically while each line is centered horizontally by the board renderer.
+The board starts at 18 columns by 5 rows. `message` payloads wrap on whole words, then the wrapped block is centered vertically while each line is centered horizontally by the board renderer.
+
+Admin changes are saved to `flipoff.config.json`, so board size, default messages, and API override duration survive a restart.
 
 ## File Structure
 
@@ -64,12 +70,14 @@ The board currently uses an 18-character width. `message` payloads wrap on whole
 flipoff/
   index.html           — Single-page app
   css/
+    admin.css          — Admin page styling
     reset.css          — CSS reset
     layout.css         — Page layout (header, hero, board)
     board.css          — Board container and accent bars
     tile.css           — Tile styling and 3D flip animation
     responsive.css     — Media queries for all screen sizes
   js/
+    admin.js           — Admin login and configuration UI
     main.js            — Entry point and UI wiring
     RemoteMessageSync.js — REST bootstrap and WebSocket sync
     Board.js           — Grid manager and transition orchestration
@@ -81,15 +89,22 @@ flipoff/
     flapAudio.js       — Embedded audio data (base64)
   server.py           — Single-process aiohttp server and API
   requirements.txt    — Python dependency list
+  admin.html          — Password-protected admin page shell
+  flipoff.config.json — Runtime config written after admin saves
 ```
 
 ## Customization
 
 Edit `js/constants.js` to change:
-- **Messages**: Add your own quotes or text
-- **Grid size**: Adjust `GRID_COLS` and `GRID_ROWS`
+- **Fallback messages**: Update `DEFAULT_MESSAGES`
+- **Fallback grid size**: Adjust `DEFAULT_GRID_COLS` and `DEFAULT_GRID_ROWS`
 - **Timing**: Tweak `SCRAMBLE_DURATION`, `STAGGER_DELAY`, etc.
 - **Colors**: Modify `SCRAMBLE_COLORS` and `ACCENT_COLORS`
+
+Use `/admin` for the runtime configuration that the server actually serves:
+- board columns and rows
+- the rotating default message array
+- how many seconds an API message stays live before the display returns to the default rotation
 
 ## API
 
@@ -115,6 +130,17 @@ curl -X POST http://localhost:8080/api/message \
 # Clear the remote override and resume local rotation
 curl -X DELETE http://localhost:8080/api/message
 ```
+
+## Admin
+
+Start the server and open [http://localhost:8080/admin](http://localhost:8080/admin).
+
+The admin panel lets you change:
+- board columns and rows
+- the default rotating messages
+- API message lifetime in seconds before the display falls back to the default rotation
+- send a temporary remote message without leaving `/admin`
+- clear the active remote override
 
 ## License
 
