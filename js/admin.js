@@ -19,18 +19,19 @@ const passwordInput = document.getElementById('password');
 const remoteMessageInput = document.getElementById('remote-message');
 
 const screensList = document.getElementById('screens-list');
-const screensDraftNote = document.getElementById('screens-draft-note');
-const pluginCatalogNote = document.getElementById('plugin-catalog-note');
 const addScreenBtn = document.getElementById('add-screen-btn');
 const screenModal = document.getElementById('screen-modal');
 const screenModalForm = document.getElementById('screen-modal-form');
 const screenModalTitle = document.getElementById('screen-modal-title');
 const screenTypeSelect = document.getElementById('screen-type-select');
+const screenTypeButtons = Array.from(document.querySelectorAll('[data-screen-type-value]'));
 const screenNameInput = document.getElementById('screen-name-input');
 const manualScreenFields = document.getElementById('manual-screen-fields');
 const pluginScreenFields = document.getElementById('plugin-screen-fields');
 const screenLineFields = document.getElementById('screen-line-fields');
 const pluginSelect = document.getElementById('plugin-select');
+const pluginSelectTrigger = document.getElementById('plugin-select-trigger');
+const pluginSelectMenu = document.getElementById('plugin-select-menu');
 const pluginRefreshMinutesInput = document.getElementById('plugin-refresh-minutes');
 const pluginSettingsFields = document.getElementById('plugin-settings-fields');
 const pluginCommonSettingsSection = document.getElementById('plugin-common-settings-section');
@@ -40,11 +41,35 @@ const closeScreenModalBtn = document.getElementById('close-screen-modal-btn');
 const cancelScreenModalBtn = document.getElementById('cancel-screen-modal-btn');
 
 const workspaceTitle = document.getElementById('workspace-title');
-const workspaceCopy = document.getElementById('workspace-copy');
+const headerBoardSize = document.getElementById('header-board-size');
+const headerScreenCount = document.getElementById('header-screen-count');
+const overviewBoardSize = document.getElementById('overview-board-size');
+const overviewBoardMeta = document.getElementById('overview-board-meta');
+const overviewRotation = document.getElementById('overview-rotation');
+const overviewRotationMeta = document.getElementById('overview-rotation-meta');
+const overviewScreenMix = document.getElementById('overview-screen-mix');
+const overviewScreenMixMeta = document.getElementById('overview-screen-mix-meta');
+const overviewOverride = document.getElementById('overview-override');
+const overviewOverrideMeta = document.getElementById('overview-override-meta');
+const rotationOverview = document.getElementById('rotation-overview');
+const overridePanelState = document.getElementById('override-panel-state');
+const overridePanelMeta = document.getElementById('override-panel-meta');
+const overridePreview = document.getElementById('override-preview');
+const pluginHealthList = document.getElementById('plugin-health-list');
+const pluginHealthSection = pluginHealthList ? pluginHealthList.closest('.workspace-section') : null;
+const messagePageStatus = document.getElementById('message-page-status');
+const messagePageMeta = document.getElementById('message-page-meta');
+const messagePagePreview = document.getElementById('message-page-preview');
 const navButtons = Array.from(document.querySelectorAll('[data-page-target]'));
+const jumpButtons = Array.from(document.querySelectorAll('[data-jump-page]'));
 const pagePanels = Array.from(document.querySelectorAll('.workspace-page'));
 
 let currentConfig = null;
+let currentMessageState = {
+  hasOverride: false,
+  lines: [],
+  updatedAt: null,
+};
 let availablePlugins = [];
 let pluginCommonSettings = {};
 let screenDrafts = [];
@@ -66,13 +91,21 @@ screensList.addEventListener('dragover', handleScreenDragOver);
 screensList.addEventListener('drop', handleScreenDrop);
 screensList.addEventListener('dragend', clearDragState);
 screenModalForm.addEventListener('submit', handleSaveScreenModal);
-screenTypeSelect.addEventListener('change', handleScreenTypeChange);
-pluginSelect.addEventListener('change', handlePluginSelectionChange);
+pluginSelectTrigger.addEventListener('click', handlePluginPickerToggle);
+pluginSelectMenu.addEventListener('click', handlePluginPickerSelect);
 closeScreenModalBtn.addEventListener('click', closeScreenModal);
 cancelScreenModalBtn.addEventListener('click', closeScreenModal);
 screenModal.addEventListener('cancel', () => {
   editingScreenIndex = null;
 });
+document.addEventListener('click', handleDocumentClick);
+
+for (const screenTypeButton of screenTypeButtons) {
+  screenTypeButton.addEventListener('click', () => {
+    screenTypeSelect.value = screenTypeButton.dataset.screenTypeValue;
+    handleScreenTypeChange();
+  });
+}
 
 for (const navButton of navButtons) {
   navButton.addEventListener('click', () => {
@@ -80,9 +113,15 @@ for (const navButton of navButtons) {
   });
 }
 
+for (const jumpButton of jumpButtons) {
+  jumpButton.addEventListener('click', () => {
+    switchPage(jumpButton.dataset.jumpPage);
+  });
+}
+
 void loadAdminState();
 
-async function loadAdminState({ successMessage = 'Admin ready.', showSuccessMessage = true } = {}) {
+async function loadAdminState({ successMessage = '', showSuccessMessage = false } = {}) {
   try {
     const configResponse = await fetch('/api/admin/config', { credentials: 'same-origin' });
 
@@ -111,9 +150,19 @@ async function loadAdminState({ successMessage = 'Admin ready.', showSuccessMess
       return;
     }
 
-    const config = await configResponse.json();
-    const screensPayload = await screensResponse.json();
-    showDashboard(config, screensPayload);
+    const messageResponse = await fetch('/api/message', { credentials: 'same-origin' });
+    if (!messageResponse.ok) {
+      showLogin();
+      setStatus('Unable to load the current override state.', 'error');
+      return;
+    }
+
+    const [config, screensPayload, messageState] = await Promise.all([
+      configResponse.json(),
+      screensResponse.json(),
+      messageResponse.json(),
+    ]);
+    showDashboard(config, screensPayload, messageState);
 
     if (showSuccessMessage) {
       setStatus(successMessage, 'success');
@@ -255,6 +304,11 @@ async function handleLogout() {
   }
 
   currentConfig = null;
+  currentMessageState = {
+    hasOverride: false,
+    lines: [],
+    updatedAt: null,
+  };
   availablePlugins = [];
   pluginCommonSettings = {};
   screenDrafts = [];
@@ -290,6 +344,7 @@ async function handleSendMessage(event) {
       return;
     }
 
+    applyMessageState(await response.json());
     setStatus('Remote message sent.', 'success');
   } catch {
     setStatus('Unable to reach the admin API.', 'error');
@@ -310,6 +365,7 @@ async function handleClearMessage() {
       return;
     }
 
+    applyMessageState(await response.json());
     setStatus('Remote override cleared.', 'success');
   } catch {
     setStatus('Unable to reach the admin API.', 'error');
@@ -489,6 +545,7 @@ function handleSaveScreenModal(event) {
 }
 
 function handleScreenTypeChange() {
+  updateScreenTypeButtons();
   syncModalSections();
 }
 
@@ -537,11 +594,12 @@ function showLogin() {
   passwordInput.focus();
 }
 
-function showDashboard(config, screensPayload) {
+function showDashboard(config, screensPayload, messageState) {
   loginShell.classList.add('hidden');
   dashboardShell.classList.remove('hidden');
   applyConfig(config);
   applyScreensPayload(screensPayload);
+  applyMessageState(messageState);
   switchPage(activePage);
 }
 
@@ -557,6 +615,7 @@ function applyConfig(config) {
   rowsInput.value = String(config.rows);
   messageDurationInput.value = String(config.messageDurationSeconds);
   durationInput.value = String(config.apiMessageDurationSeconds);
+  renderDashboardSummary();
 }
 
 function applyScreensPayload(payload) {
@@ -567,6 +626,234 @@ function applyScreensPayload(payload) {
   updateScreensDraftNote();
   updatePluginCatalogNote();
   renderScreensList();
+  renderDashboardSummary();
+}
+
+function applyMessageState(messageState) {
+  currentMessageState = clone(messageState || {
+    hasOverride: false,
+    lines: [],
+    updatedAt: null,
+  });
+  renderDashboardSummary();
+}
+
+function renderDashboardSummary() {
+  if (!currentConfig) {
+    return;
+  }
+
+  const manualScreens = screenDrafts.filter((screen) => screen.type === 'manual');
+  const pluginScreens = screenDrafts.filter((screen) => screen.type === 'plugin');
+  const pluginIssues = pluginScreens.filter((screen) => screen.lastError).length;
+  const totalCells = currentConfig.cols * currentConfig.rows;
+  const hasOverride = Boolean(currentMessageState.hasOverride);
+
+  if (headerBoardSize) {
+    headerBoardSize.textContent = `${currentConfig.cols} x ${currentConfig.rows}`;
+  }
+
+  if (headerScreenCount) {
+    headerScreenCount.textContent = String(screenDrafts.length);
+  }
+
+  if (overviewBoardSize) {
+    overviewBoardSize.textContent = `${currentConfig.cols} x ${currentConfig.rows}`;
+  }
+
+  if (overviewBoardMeta) {
+    overviewBoardMeta.textContent = `${totalCells} characters across ${currentConfig.rows} ${pluralize('row', currentConfig.rows)}.`;
+  }
+
+  if (overviewRotation) {
+    overviewRotation.textContent = formatDuration(currentConfig.messageDurationSeconds);
+  }
+
+  if (overviewRotationMeta) {
+    overviewRotationMeta.textContent = `Screens advance every ${formatDuration(currentConfig.messageDurationSeconds)}. API overrides expire after ${formatDuration(currentConfig.apiMessageDurationSeconds)}.`;
+  }
+
+  if (overviewScreenMix) {
+    overviewScreenMix.textContent = `${screenDrafts.length} total`;
+  }
+
+  if (overviewScreenMixMeta) {
+    overviewScreenMixMeta.textContent = `${manualScreens.length} manual · ${pluginScreens.length} plugin.`;
+  }
+
+  if (overviewOverride) {
+    overviewOverride.textContent = hasOverride ? 'Live' : 'Clear';
+  }
+
+  if (overviewOverrideMeta) {
+    overviewOverrideMeta.textContent = hasOverride
+      ? `Override updated ${formatTimestamp(currentMessageState.updatedAt)}.`
+      : 'Rotation is running without a temporary override.';
+  }
+
+  renderRotationOverview();
+  renderOverridePanels();
+  renderPluginHealth();
+}
+
+function renderRotationOverview() {
+  if (!rotationOverview) {
+    return;
+  }
+
+  rotationOverview.replaceChildren();
+
+  if (screenDrafts.length === 0) {
+    rotationOverview.append(buildEmptyState('No screens are configured yet.'));
+    return;
+  }
+
+  const visibleScreens = screenDrafts.slice(0, 6);
+  for (const [index, screen] of visibleScreens.entries()) {
+    const item = document.createElement('article');
+    item.className = 'rotation-item';
+
+    const head = document.createElement('div');
+    head.className = 'rotation-item-head';
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'stack compact-stack';
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'rotation-item-head';
+
+    const indexBadge = document.createElement('span');
+    indexBadge.className = 'rotation-item-index';
+    indexBadge.textContent = String(index + 1);
+
+    const title = document.createElement('h3');
+    title.className = 'rotation-item-title';
+    title.textContent = getScreenTitle(screen, index);
+
+    titleRow.append(indexBadge, title);
+
+    const meta = document.createElement('div');
+    meta.className = 'screen-item-meta';
+    meta.append(buildScreenChip(screen.type === 'manual' ? 'Manual' : 'Plugin', screen.type === 'manual' ? '' : 'accent'));
+
+    if (screen.type === 'plugin') {
+      meta.append(buildScreenChip(`${Math.round(screen.refreshIntervalSeconds / 60)} min`));
+      if (screen.lastError) {
+        meta.append(buildScreenChip('Needs attention', 'error'));
+      } else if (screen.lastRefreshedAt) {
+        meta.append(buildScreenChip(`Updated ${formatTimestamp(screen.lastRefreshedAt)}`));
+      }
+    }
+
+    const copy = document.createElement('p');
+    copy.className = 'helper-copy';
+    copy.textContent = getScreenSummary(screen);
+
+    titleWrap.append(titleRow, meta, copy);
+    head.append(titleWrap);
+    item.append(head);
+    rotationOverview.append(item);
+  }
+
+  if (screenDrafts.length > visibleScreens.length) {
+    rotationOverview.append(buildEmptyState(`${screenDrafts.length - visibleScreens.length} more ${pluralize('screen', screenDrafts.length - visibleScreens.length)} in the saved rotation.`));
+  }
+}
+
+function renderOverridePanels() {
+  if (!overridePanelState || !overridePanelMeta || !overridePreview || !messagePageStatus || !messagePageMeta || !messagePagePreview) {
+    return;
+  }
+
+  const hasOverride = Boolean(currentMessageState.hasOverride);
+  const previewLines = buildOverridePreviewLines();
+  const statusLabel = hasOverride ? 'Override live' : 'Rotation live';
+  const statusTone = hasOverride ? 'warning' : 'success';
+  const metaText = hasOverride
+    ? `Updated ${formatTimestamp(currentMessageState.updatedAt)}. Clear it manually or wait for the API timer to expire.`
+    : 'No temporary override is active. The screen rotation is running normally.';
+
+  setStatusPill(overridePanelState, statusLabel, statusTone);
+  overridePanelMeta.textContent = metaText;
+  overridePreview.textContent = previewLines.join('\n');
+
+  setStatusPill(messagePageStatus, statusLabel, statusTone);
+  messagePageMeta.textContent = metaText;
+  messagePagePreview.textContent = previewLines.join('\n');
+}
+
+function renderPluginHealth() {
+  if (!pluginHealthList || !pluginHealthSection) {
+    return;
+  }
+
+  pluginHealthList.replaceChildren();
+
+  const pluginScreens = screenDrafts.filter((screen) => screen.type === 'plugin');
+  if (pluginScreens.length === 0) {
+    pluginHealthSection.classList.add('hidden');
+    return;
+  }
+
+  pluginHealthSection.classList.remove('hidden');
+
+  for (const [index, screen] of pluginScreens.entries()) {
+    const item = document.createElement('article');
+    item.className = 'health-item';
+
+    const head = document.createElement('div');
+    head.className = 'health-item-head';
+
+    const title = document.createElement('h3');
+    title.className = 'health-item-title';
+    title.textContent = getScreenTitle(screen, index);
+
+    const status = document.createElement('span');
+    if (screen.lastError) {
+      setStatusPill(status, 'Needs attention', 'error');
+    } else if (screen.lastRefreshedAt) {
+      setStatusPill(status, 'Healthy', 'success');
+    } else {
+      setStatusPill(status, 'Pending', 'neutral');
+    }
+
+    head.append(title, status);
+
+    const meta = document.createElement('p');
+    meta.className = 'helper-copy';
+    meta.textContent = screen.lastError
+      ? screen.lastError
+      : screen.lastRefreshedAt
+        ? `Last refresh ${formatTimestamp(screen.lastRefreshedAt)}.`
+        : 'Awaiting first refresh.';
+
+    item.append(head, meta);
+    pluginHealthList.append(item);
+  }
+}
+
+function buildOverridePreviewLines() {
+  if (currentMessageState.hasOverride) {
+    return padLocalLines(currentMessageState.lines || []);
+  }
+
+  const fallbackLine = screenDrafts[0]
+    ? `Next: ${getScreenTitle(screenDrafts[0], 0)}`
+    : 'Rotation idle';
+  return padLocalLines(['', fallbackLine.slice(0, currentConfig.cols), '']);
+}
+
+function setStatusPill(element, label, tone = 'neutral') {
+  element.textContent = label;
+  element.className = 'status-pill';
+  element.classList.add(tone);
+}
+
+function buildEmptyState(text) {
+  const emptyState = document.createElement('div');
+  emptyState.className = 'empty-state';
+  emptyState.textContent = text;
+  return emptyState;
 }
 
 function renderScreensList() {
@@ -577,6 +864,7 @@ function renderScreensList() {
     emptyState.className = 'screen-empty';
     emptyState.textContent = 'No screens configured yet.';
     screensList.append(emptyState);
+    renderDashboardSummary();
     return;
   }
 
@@ -586,72 +874,34 @@ function renderScreensList() {
     screenItem.draggable = true;
     screenItem.dataset.index = String(index);
 
-    const header = document.createElement('div');
-    header.className = 'screen-item-header';
-
-    const titleGroup = document.createElement('div');
+    const handle = document.createElement('span');
+    handle.className = 'screen-drag-handle';
+    handle.setAttribute('aria-hidden', 'true');
+    handle.innerHTML = getScreenActionIcon('drag');
 
     const title = document.createElement('h3');
     title.className = 'screen-item-title';
     title.textContent = getScreenTitle(screen, index);
 
-    const meta = document.createElement('div');
-    meta.className = 'screen-item-meta';
-    meta.append(
-      buildScreenChip(screen.type === 'manual' ? 'Manual' : 'Plugin', screen.type === 'manual' ? '' : 'accent'),
-    );
-
-    if (screen.type === 'plugin') {
-      meta.append(buildScreenChip(screen.pluginName || screen.pluginId));
-      meta.append(buildScreenChip(`${Math.round(screen.refreshIntervalSeconds / 60)} min`));
-
-      if (screen.lastError) {
-        meta.append(buildScreenChip('Needs attention', 'error'));
-      } else if (screen.lastRefreshedAt) {
-        meta.append(buildScreenChip(`Updated ${formatTimestamp(screen.lastRefreshedAt)}`));
-      }
-    }
-
-    titleGroup.append(title, meta);
-
     const actions = document.createElement('div');
     actions.className = 'screen-item-actions';
-    actions.append(
-      buildScreenActionButton('drag-handle', 'Drag to reorder'),
-    );
 
     if (screen.type === 'plugin') {
-      actions.append(buildScreenActionButton('', 'Refresh', 'refresh'));
+      actions.append(
+        buildScreenIconButton('Refresh plugin screen', 'refresh', 'refresh'),
+      );
     }
 
     actions.append(
-      buildScreenActionButton('', 'Edit', 'edit'),
-      buildScreenActionButton('danger', 'Delete', 'delete'),
+      buildScreenIconButton('Edit screen', 'edit', 'edit'),
+      buildScreenIconButton('Delete screen', 'delete', 'delete danger'),
     );
 
-    header.append(titleGroup, actions);
-
-    const copy = document.createElement('p');
-    copy.className = 'screen-item-copy';
-    copy.textContent = getScreenSummary(screen);
-
-    const preview = document.createElement('div');
-    preview.className = 'screen-preview';
-
-    for (const line of getScreenPreviewLines(screen)) {
-      const lineElement = document.createElement('div');
-      lineElement.className = 'screen-preview-line';
-      if (!line) {
-        lineElement.classList.add('is-empty');
-      } else {
-        lineElement.textContent = line;
-      }
-      preview.append(lineElement);
-    }
-
-    screenItem.append(header, copy, preview);
+    screenItem.append(handle, title, actions);
     screensList.append(screenItem);
   }
+
+  renderDashboardSummary();
 }
 
 function buildScreenChip(label, extraClassName = '') {
@@ -672,6 +922,61 @@ function buildScreenActionButton(extraClassName, label, action = '') {
   }
 
   return button;
+}
+
+function buildScreenIconButton(label, action, extraClassName = '') {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = ['screen-icon-button', extraClassName].filter(Boolean).join(' ');
+  button.dataset.screenAction = action;
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  button.innerHTML = getScreenActionIcon(action);
+  return button;
+}
+
+function getScreenActionIcon(action) {
+  if (action === 'edit') {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 20l4.2-1 9.4-9.4-3.2-3.2L5 15.8 4 20z" />
+        <path d="M13.8 5.8l3.2 3.2" />
+      </svg>
+    `;
+  }
+
+  if (action === 'delete') {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M5 7h14" />
+        <path d="M9 7V5h6v2" />
+        <path d="M8 10v7" />
+        <path d="M12 10v7" />
+        <path d="M16 10v7" />
+        <path d="M7 7l1 12h8l1-12" />
+      </svg>
+    `;
+  }
+
+  if (action === 'refresh') {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M20 11a8 8 0 1 0 2 5.5" />
+        <path d="M20 4v7h-7" />
+      </svg>
+    `;
+  }
+
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="6" r="1.5" />
+      <circle cx="8" cy="12" r="1.5" />
+      <circle cx="8" cy="18" r="1.5" />
+      <circle cx="16" cy="6" r="1.5" />
+      <circle cx="16" cy="12" r="1.5" />
+      <circle cx="16" cy="18" r="1.5" />
+    </svg>
+  `;
 }
 
 function openScreenModal(index = null) {
@@ -706,6 +1011,7 @@ function openScreenModal(index = null) {
 
 function closeScreenModal() {
   editingScreenIndex = null;
+  closePluginPicker();
 
   if (typeof screenModal.close === 'function' && screenModal.open) {
     screenModal.close();
@@ -716,23 +1022,22 @@ function closeScreenModal() {
 }
 
 function populatePluginSelect(selectedPluginId = '') {
-  pluginSelect.replaceChildren();
+  pluginSelectMenu.replaceChildren();
 
   for (const plugin of availablePlugins) {
-    const option = document.createElement('option');
-    option.value = plugin.id;
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'custom-picker-option';
+    option.dataset.pluginId = plugin.id;
+    option.setAttribute('role', 'option');
     option.textContent = plugin.name;
-    pluginSelect.append(option);
+    pluginSelectMenu.append(option);
   }
 
-  if (selectedPluginId && getPluginById(selectedPluginId)) {
-    pluginSelect.value = selectedPluginId;
-    return;
-  }
-
-  if (availablePlugins[0]) {
-    pluginSelect.value = availablePlugins[0].id;
-  }
+  const nextValue = selectedPluginId && getPluginById(selectedPluginId)
+    ? selectedPluginId
+    : availablePlugins[0]?.id || '';
+  setPluginSelectValue(nextValue);
 }
 
 function populatePluginEditor(draft) {
@@ -746,7 +1051,7 @@ function populatePluginEditor(draft) {
     return;
   }
 
-  pluginSelect.value = plugin.id;
+  setPluginSelectValue(plugin.id);
   pluginRefreshMinutesInput.value = String(Math.max(1, Math.round((draft.refreshIntervalSeconds || plugin.defaultRefreshIntervalSeconds) / 60)));
   renderPluginSchemaFields(draft.settings || {}, draft.design || {});
 }
@@ -830,10 +1135,77 @@ function buildSchemaField(field, sectionName, values) {
   return wrapper;
 }
 
+function handlePluginPickerToggle(event) {
+  event.stopPropagation();
+  const shouldOpen = pluginSelectMenu.classList.contains('hidden');
+  if (shouldOpen) {
+    openPluginPicker();
+    return;
+  }
+  closePluginPicker();
+}
+
+function handlePluginPickerSelect(event) {
+  const option = event.target.closest('[data-plugin-id]');
+  if (!option) {
+    return;
+  }
+
+  setPluginSelectValue(option.dataset.pluginId);
+  closePluginPicker();
+  handlePluginSelectionChange();
+}
+
+function handleDocumentClick(event) {
+  if (pluginSelectMenu.classList.contains('hidden')) {
+    return;
+  }
+
+  if (
+    event.target === pluginSelectTrigger
+    || pluginSelectTrigger.contains(event.target)
+    || pluginSelectMenu.contains(event.target)
+  ) {
+    return;
+  }
+
+  closePluginPicker();
+}
+
+function openPluginPicker() {
+  pluginSelectMenu.classList.remove('hidden');
+  pluginSelectTrigger.setAttribute('aria-expanded', 'true');
+}
+
+function closePluginPicker() {
+  pluginSelectMenu.classList.add('hidden');
+  pluginSelectTrigger.setAttribute('aria-expanded', 'false');
+}
+
+function setPluginSelectValue(pluginId) {
+  pluginSelect.value = pluginId || '';
+  const plugin = getPluginById(pluginSelect.value);
+  pluginSelectTrigger.textContent = plugin ? plugin.name : 'Select plugin';
+
+  for (const option of pluginSelectMenu.querySelectorAll('[data-plugin-id]')) {
+    const isActive = option.dataset.pluginId === pluginSelect.value;
+    option.classList.toggle('active', isActive);
+    option.setAttribute('aria-selected', String(isActive));
+  }
+}
+
 function syncModalSections() {
   const isPlugin = screenTypeSelect.value === 'plugin';
   manualScreenFields.classList.toggle('hidden', isPlugin);
   pluginScreenFields.classList.toggle('hidden', !isPlugin);
+}
+
+function updateScreenTypeButtons() {
+  for (const button of screenTypeButtons) {
+    const isActive = button.dataset.screenTypeValue === screenTypeSelect.value;
+    button.classList.toggle('active', isActive);
+    button.setAttribute('aria-pressed', String(isActive));
+  }
 }
 
 function renderManualFields(lines = []) {
@@ -909,7 +1281,6 @@ function switchPage(pageId) {
     if (isActive) {
       navButton.setAttribute('aria-current', 'page');
       workspaceTitle.textContent = navButton.dataset.pageTitle;
-      workspaceCopy.textContent = navButton.dataset.pageCopy;
     } else {
       navButton.removeAttribute('aria-current');
     }
@@ -929,17 +1300,11 @@ function markScreensDirty(message) {
 }
 
 function updateScreensDraftNote() {
-  screensDraftNote.classList.toggle('hidden', !screensDirty);
+  return;
 }
 
 function updatePluginCatalogNote() {
-  if (availablePlugins.length === 0) {
-    pluginCatalogNote.textContent = 'No plugins are installed yet.';
-    return;
-  }
-
-  const names = availablePlugins.map((plugin) => plugin.name).join(', ');
-  pluginCatalogNote.textContent = `${availablePlugins.length} plugin${availablePlugins.length === 1 ? '' : 's'} available: ${names}.`;
+  return;
 }
 
 function clearDragIndicators() {
@@ -1062,6 +1427,24 @@ function formatTimestamp(timestamp) {
   }
 }
 
+function formatDuration(seconds) {
+  if (seconds < 60) {
+    return `${seconds} ${pluralize('sec', seconds)}`;
+  }
+
+  if (seconds < 3600) {
+    const minutes = Math.round(seconds / 60);
+    return `${minutes} ${pluralize('min', minutes)}`;
+  }
+
+  const hours = Math.round(seconds / 3600);
+  return `${hours} ${pluralize('hr', hours)}`;
+}
+
+function pluralize(word, count) {
+  return count === 1 ? word : `${word}s`;
+}
+
 function createLocalScreenId() {
   if (window.crypto?.randomUUID) {
     return window.crypto.randomUUID();
@@ -1076,6 +1459,12 @@ function clone(value) {
 function setStatus(message, kind = '') {
   statusMessage.textContent = message;
   statusMessage.className = 'status-message';
+
+  if (!message) {
+    statusMessage.classList.add('hidden');
+    return;
+  }
+
   if (kind) {
     statusMessage.classList.add(kind);
   }
