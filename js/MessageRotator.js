@@ -26,19 +26,19 @@ export class MessageRotator {
     }
   }
 
-  next() {
+  next(options = {}) {
     if (this._remoteOverride || this.messages.length === 0) return;
 
     this.currentIndex = (this.currentIndex + 1) % this.messages.length;
-    this.board.displayMessage(this.messages[this.currentIndex]);
+    this.board.displayMessage(this.messages[this.currentIndex], options);
     this._resetAutoRotation();
   }
 
-  prev() {
+  prev(options = {}) {
     if (this._remoteOverride || this.messages.length === 0) return;
 
     this.currentIndex = (this.currentIndex - 1 + this.messages.length) % this.messages.length;
-    this.board.displayMessage(this.messages[this.currentIndex]);
+    this.board.displayMessage(this.messages[this.currentIndex], options);
     this._resetAutoRotation();
   }
 
@@ -70,13 +70,13 @@ export class MessageRotator {
     this._paused = true;
   }
 
-  disableRemoteOverride({ showNextMessage = true } = {}) {
+  disableRemoteOverride({ showNextMessage = true, interrupt = false } = {}) {
     this._remoteOverride = false;
     this._paused = false;
     this._ensureTimer();
 
     if (showNextMessage) {
-      this.next();
+      this.next({ interrupt });
       return;
     }
 

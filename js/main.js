@@ -98,13 +98,13 @@ async function bootstrap() {
     if (state.hasOverride) {
       remoteOverrideActive = true;
       rotator.enableRemoteOverride();
-      board.displayMessage(Array.isArray(state.lines) ? state.lines : []);
+      board.displayMessage(Array.isArray(state.lines) ? state.lines : [], { interrupt: true });
       return;
     }
 
     if (remoteOverrideActive) {
       remoteOverrideActive = false;
-      rotator.disableRemoteOverride({ showNextMessage: true });
+      rotator.disableRemoteOverride({ showNextMessage: true, interrupt: true });
       return;
     }
 

@@ -97,8 +97,10 @@ export class Board {
     });
   }
 
-  displayMessage(lines) {
-    if (this.isTransitioning) {
+  displayMessage(lines, { interrupt = false } = {}) {
+    if (interrupt) {
+      this.interruptTransition();
+    } else if (this.isTransitioning) {
       this.pendingLines = [...lines];
       return;
     }
@@ -150,6 +152,24 @@ export class Board {
         this.displayMessage(nextLines);
       }
     }, TOTAL_TRANSITION + 200);
+  }
+
+  interruptTransition() {
+    if (this.transitionTimer) {
+      window.clearTimeout(this.transitionTimer);
+      this.transitionTimer = null;
+    }
+
+    this.pendingLines = null;
+    this.isTransitioning = false;
+
+    for (const row of this.tiles) {
+      for (const tile of row) {
+        tile.cancelAnimation();
+      }
+    }
+
+    this.currentGrid = this.tiles.map((row) => row.map((tile) => tile.currentChar));
   }
 
   _formatToGrid(lines) {
