@@ -1,17 +1,23 @@
 export class RemoteMessageSync {
-  constructor(onEvent) {
+  constructor(onEvent, boardSlug = null) {
     this.onEvent = onEvent;
+    this.routeBoardSlug = boardSlug;
+    this.activeBoardSlug = boardSlug;
     this.ws = null;
     this.reconnectTimer = null;
     this.isStopped = false;
   }
 
-  fetchConfig() {
-    return this._fetchJson('/api/config');
+  async fetchConfig() {
+    const config = await this._fetchJson(this._buildApiPath('/api/config', this.routeBoardSlug));
+    if (config?.boardSlug) {
+      this.activeBoardSlug = config.boardSlug;
+    }
+    return config;
   }
 
   fetchMessageState() {
-    return this._fetchJson('/api/message');
+    return this._fetchJson(this._buildApiPath('/api/message', this.activeBoardSlug || this.routeBoardSlug));
   }
 
   connect() {
@@ -91,6 +97,14 @@ export class RemoteMessageSync {
 
   _getWebSocketUrl() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.host}/ws`;
+    return `${protocol}//${window.location.host}${this._buildApiPath('/ws', this.activeBoardSlug || this.routeBoardSlug)}`;
+  }
+
+  _buildApiPath(path, boardSlug) {
+    if (!boardSlug) {
+      return path;
+    }
+
+    return `${path}?board=${encodeURIComponent(boardSlug)}`;
   }
 }
