@@ -13,10 +13,16 @@ const colsInput = document.getElementById('cols');
 const rowsInput = document.getElementById('rows');
 const messageDurationInput = document.getElementById('message-duration');
 const durationInput = document.getElementById('api-duration');
+const boardNameInput = document.getElementById('board-name');
+const boardSlugInput = document.getElementById('board-slug');
+const boardDefaultInput = document.getElementById('board-default');
 const adminPasswordSettingInput = document.getElementById('admin-password-setting');
 const adminPasswordConfirmSettingInput = document.getElementById('admin-password-confirm-setting');
 const passwordInput = document.getElementById('password');
 const remoteMessageInput = document.getElementById('remote-message');
+const boardSelect = document.getElementById('board-select');
+const addBoardBtn = document.getElementById('add-board-btn');
+const deleteBoardBtn = document.getElementById('delete-board-btn');
 
 const screensList = document.getElementById('screens-list');
 const addScreenBtn = document.getElementById('add-screen-btn');
@@ -26,6 +32,7 @@ const screenModalTitle = document.getElementById('screen-modal-title');
 const screenTypeSelect = document.getElementById('screen-type-select');
 const screenTypeButtons = Array.from(document.querySelectorAll('[data-screen-type-value]'));
 const screenNameInput = document.getElementById('screen-name-input');
+const screenSlugInput = document.getElementById('screen-slug-input');
 const manualScreenFields = document.getElementById('manual-screen-fields');
 const pluginScreenFields = document.getElementById('plugin-screen-fields');
 const screenLineFields = document.getElementById('screen-line-fields');
@@ -41,6 +48,8 @@ const closeScreenModalBtn = document.getElementById('close-screen-modal-btn');
 const cancelScreenModalBtn = document.getElementById('cancel-screen-modal-btn');
 
 const workspaceTitle = document.getElementById('workspace-title');
+const workspaceHeaderActions = document.getElementById('workspace-header-actions');
+const homeBoardGrid = document.getElementById('home-board-grid');
 const headerBoardSize = document.getElementById('header-board-size');
 const headerScreenCount = document.getElementById('header-screen-count');
 const overviewBoardSize = document.getElementById('overview-board-size');
@@ -63,8 +72,11 @@ const messagePagePreview = document.getElementById('message-page-preview');
 const navButtons = Array.from(document.querySelectorAll('[data-page-target]'));
 const jumpButtons = Array.from(document.querySelectorAll('[data-jump-page]'));
 const pagePanels = Array.from(document.querySelectorAll('.workspace-page'));
+const SELECTED_BOARD_STORAGE_KEY = 'flipoff.admin.selectedBoard';
 
 let currentConfig = null;
+let currentBoardSlug = null;
+let availableBoards = [];
 let currentMessageState = {
   hasOverride: false,
   lines: [],
@@ -85,6 +97,9 @@ messageForm.addEventListener('submit', handleSendMessage);
 logoutBtn.addEventListener('click', handleLogout);
 clearMessageBtn.addEventListener('click', handleClearMessage);
 addScreenBtn.addEventListener('click', () => openScreenModal());
+boardSelect.addEventListener('change', handleBoardChange);
+addBoardBtn.addEventListener('click', handleAddBoard);
+deleteBoardBtn.addEventListener('click', handleDeleteBoard);
 screensList.addEventListener('click', handleScreensListClick);
 screensList.addEventListener('dragstart', handleScreenDragStart);
 screensList.addEventListener('dragover', handleScreenDragOver);
@@ -119,17 +134,35 @@ for (const jumpButton of jumpButtons) {
   });
 }
 
-void loadAdminState();
+void loadAdminState({ boardSlug: loadStoredBoardSlug() });
 
-async function loadAdminState({ successMessage = '', showSuccessMessage = false } = {}) {
+async function loadAdminState({ successMessage = '', showSuccessMessage = false, boardSlug = currentBoardSlug } = {}) {
   try {
-    const configResponse = await fetch('/api/admin/config', { credentials: 'same-origin' });
+    const boardsResponse = await fetch('/api/admin/boards', { credentials: 'same-origin' });
 
-    if (configResponse.status === 401) {
+    if (boardsResponse.status === 401) {
       showLogin();
       return;
     }
 
+    if (!boardsResponse.ok) {
+      const error = await readError(boardsResponse, 'Unable to load boards.');
+      showLogin();
+      setStatus(error, 'error');
+      return;
+    }
+
+    const boardsPayload = await boardsResponse.json();
+    applyBoardsPayload(boardsPayload, boardSlug);
+
+    if (!currentBoardSlug) {
+      showLogin();
+      setStatus('No boards are configured.', 'error');
+      return;
+    }
+
+    const boardQuery = getBoardQuery(currentBoardSlug);
+    const configResponse = await fetch(`/api/admin/config${boardQuery}`, { credentials: 'same-origin' });
     if (!configResponse.ok) {
       const error = await readError(configResponse, 'Unable to load admin configuration.');
       showLogin();
@@ -137,7 +170,7 @@ async function loadAdminState({ successMessage = '', showSuccessMessage = false 
       return;
     }
 
-    const screensResponse = await fetch('/api/admin/screens', { credentials: 'same-origin' });
+    const screensResponse = await fetch(`/api/admin/screens${boardQuery}`, { credentials: 'same-origin' });
     if (screensResponse.status === 401) {
       showLogin();
       return;
@@ -150,7 +183,7 @@ async function loadAdminState({ successMessage = '', showSuccessMessage = false 
       return;
     }
 
-    const messageResponse = await fetch('/api/message', { credentials: 'same-origin' });
+    const messageResponse = await fetch(`/api/message${boardQuery}`, { credentials: 'same-origin' });
     if (!messageResponse.ok) {
       showLogin();
       setStatus('Unable to load the current override state.', 'error');
@@ -162,13 +195,150 @@ async function loadAdminState({ successMessage = '', showSuccessMessage = false 
       screensResponse.json(),
       messageResponse.json(),
     ]);
-    showDashboard(config, screensPayload, messageState);
+    showDashboard(boardsPayload, config, screensPayload, messageState);
 
     if (showSuccessMessage) {
       setStatus(successMessage, 'success');
     }
   } catch {
     showLogin();
+    setStatus('Unable to reach the admin API.', 'error');
+  }
+}
+
+function applyBoardsPayload(payload, requestedBoardSlug = currentBoardSlug) {
+  availableBoards = clone(payload?.boards || []);
+  const fallbackSlug = payload?.defaultBoardSlug || availableBoards[0]?.slug || null;
+  currentBoardSlug = availableBoards.some((board) => board.slug === requestedBoardSlug)
+    ? requestedBoardSlug
+    : fallbackSlug;
+  persistBoardSlug(currentBoardSlug);
+  renderBoardSelector();
+  renderHomeBoardCards();
+}
+
+function renderBoardSelector() {
+  if (!boardSelect) {
+    return;
+  }
+
+  boardSelect.replaceChildren();
+
+  for (const board of availableBoards) {
+    const option = document.createElement('option');
+    option.value = board.slug;
+    option.textContent = board.isDefault ? `${board.name} (${board.slug}, default)` : `${board.name} (${board.slug})`;
+    boardSelect.append(option);
+  }
+
+  boardSelect.value = currentBoardSlug || '';
+  deleteBoardBtn.disabled = availableBoards.length <= 1 || !currentBoardSlug;
+}
+
+function getBoardQuery(boardSlug = currentBoardSlug) {
+  return boardSlug ? `?board=${encodeURIComponent(boardSlug)}` : '';
+}
+
+function loadStoredBoardSlug() {
+  try {
+    return window.localStorage.getItem(SELECTED_BOARD_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function persistBoardSlug(boardSlug) {
+  try {
+    if (boardSlug) {
+      window.localStorage.setItem(SELECTED_BOARD_STORAGE_KEY, boardSlug);
+      return;
+    }
+
+    window.localStorage.removeItem(SELECTED_BOARD_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures and keep the UI functional.
+  }
+}
+
+async function handleBoardChange() {
+  if (screensDirty) {
+    setStatus('Save screens before switching boards.', 'error');
+    boardSelect.value = currentBoardSlug || '';
+    return;
+  }
+
+  await loadAdminState({ boardSlug: boardSelect.value });
+}
+
+async function handleAddBoard() {
+  const name = window.prompt('Board name');
+  if (!name) {
+    return;
+  }
+
+  const suggestedSlug = slugify(name);
+  const slugInput = window.prompt('Board slug', suggestedSlug);
+  if (!slugInput) {
+    return;
+  }
+
+  setStatus('Creating board...');
+
+  try {
+    const response = await fetch('/api/admin/boards', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ name, slug: slugInput }),
+    });
+
+    if (!response.ok) {
+      setStatus(await readError(response, 'Unable to create the board.'), 'error');
+      return;
+    }
+
+    await loadAdminState({
+      boardSlug: slugify(slugInput),
+      successMessage: 'Board created.',
+      showSuccessMessage: true,
+    });
+  } catch {
+    setStatus('Unable to reach the admin API.', 'error');
+  }
+}
+
+async function handleDeleteBoard() {
+  if (!currentBoardSlug) {
+    return;
+  }
+
+  const board = availableBoards.find((entry) => entry.slug === currentBoardSlug);
+  if (!board) {
+    return;
+  }
+
+  if (!window.confirm(`Delete board "${board.name}"?`)) {
+    return;
+  }
+
+  setStatus('Deleting board...');
+
+  try {
+    const response = await fetch(`/api/admin/boards/${encodeURIComponent(currentBoardSlug)}`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+    });
+
+    if (!response.ok) {
+      setStatus(await readError(response, 'Unable to delete the board.'), 'error');
+      return;
+    }
+
+    await loadAdminState({
+      successMessage: 'Board deleted.',
+      showSuccessMessage: true,
+    });
+  } catch {
     setStatus('Unable to reach the admin API.', 'error');
   }
 }
@@ -223,6 +393,9 @@ async function handleSaveSettings(event) {
 
   try {
     const payload = {
+      name: boardNameInput.value.trim(),
+      slug: boardSlugInput.value.trim(),
+      isDefault: Boolean(boardDefaultInput.checked),
       cols: Number(colsInput.value),
       rows: Number(rowsInput.value),
       messageDurationSeconds: Number(messageDurationInput.value),
@@ -233,7 +406,7 @@ async function handleSaveSettings(event) {
       payload.adminPassword = nextAdminPassword;
     }
 
-    const response = await fetch('/api/admin/config', {
+    const response = await fetch(`/api/admin/config${getBoardQuery()}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
@@ -245,9 +418,12 @@ async function handleSaveSettings(event) {
       return;
     }
 
+    const savedConfig = await response.json();
+    currentBoardSlug = savedConfig.slug;
     adminPasswordSettingInput.value = '';
     adminPasswordConfirmSettingInput.value = '';
     await loadAdminState({
+      boardSlug: savedConfig.slug,
       successMessage: nextAdminPassword
         ? 'Settings and admin password saved. Display pages will refresh automatically.'
         : 'Settings saved. Display pages will refresh automatically.',
@@ -269,7 +445,7 @@ async function handleSaveScreens(event) {
   setStatus('Saving screens...');
 
   try {
-    const response = await fetch('/api/admin/screens', {
+    const response = await fetch(`/api/admin/screens${getBoardQuery()}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
@@ -304,6 +480,8 @@ async function handleLogout() {
   }
 
   currentConfig = null;
+  currentBoardSlug = null;
+  availableBoards = [];
   currentMessageState = {
     hasOverride: false,
     lines: [],
@@ -336,7 +514,7 @@ async function handleSendMessage(event) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ boardSlug: currentBoardSlug, message }),
     });
 
     if (!response.ok) {
@@ -355,7 +533,7 @@ async function handleClearMessage() {
   setStatus('Clearing active override...');
 
   try {
-    const response = await fetch('/api/message', {
+    const response = await fetch(`/api/message${getBoardQuery()}`, {
       method: 'DELETE',
       credentials: 'same-origin',
     });
@@ -486,7 +664,18 @@ function handleSaveScreenModal(event) {
 
   const type = screenTypeSelect.value;
   const name = screenNameInput.value.trim();
+  const slug = slugify(screenSlugInput.value.trim() || name || `screen-${editingScreenIndex === null ? screenDrafts.length + 1 : editingScreenIndex + 1}`);
   const id = editingScreenIndex === null ? createLocalScreenId() : screenDrafts[editingScreenIndex].id;
+
+  if (!slug) {
+    setStatus('Enter a valid slug for the screen.', 'error');
+    return;
+  }
+
+  if (screenDrafts.some((screen, index) => index !== editingScreenIndex && screen.slug === slug)) {
+    setStatus('Screen slugs must be unique within a board.', 'error');
+    return;
+  }
 
   if (type === 'manual') {
     const lines = Array.from(screenLineFields.querySelectorAll('input')).map((input) => input.value.trim());
@@ -499,6 +688,7 @@ function handleSaveScreenModal(event) {
 
     upsertScreenDraft(editingScreenIndex, {
       id,
+      slug,
       type: 'manual',
       name,
       enabled: true,
@@ -530,6 +720,7 @@ function handleSaveScreenModal(event) {
 
   upsertScreenDraft(editingScreenIndex, {
     id,
+    slug,
     type: 'plugin',
     name,
     enabled: true,
@@ -567,7 +758,7 @@ async function refreshPluginScreen(index) {
   setStatus(`Refreshing ${getScreenTitle(screen, index)}...`);
 
   try {
-    const response = await fetch(`/api/admin/screens/${encodeURIComponent(screen.id)}/refresh`, {
+    const response = await fetch(`/api/admin/screens/${encodeURIComponent(screen.id)}/refresh${getBoardQuery()}`, {
       method: 'POST',
       credentials: 'same-origin',
     });
@@ -594,9 +785,10 @@ function showLogin() {
   passwordInput.focus();
 }
 
-function showDashboard(config, screensPayload, messageState) {
+function showDashboard(boardsPayload, config, screensPayload, messageState) {
   loginShell.classList.add('hidden');
   dashboardShell.classList.remove('hidden');
+  applyBoardsPayload(boardsPayload, config.slug);
   applyConfig(config);
   applyScreensPayload(screensPayload);
   applyMessageState(messageState);
@@ -605,12 +797,19 @@ function showDashboard(config, screensPayload, messageState) {
 
 function applyConfig(config) {
   currentConfig = {
+    slug: config.slug,
+    name: config.name,
+    isDefault: Boolean(config.isDefault),
     cols: config.cols,
     rows: config.rows,
     messageDurationSeconds: config.messageDurationSeconds,
     apiMessageDurationSeconds: config.apiMessageDurationSeconds,
   };
+  currentBoardSlug = config.slug;
 
+  boardNameInput.value = config.name || '';
+  boardSlugInput.value = config.slug || '';
+  boardDefaultInput.checked = Boolean(config.isDefault);
   colsInput.value = String(config.cols);
   rowsInput.value = String(config.rows);
   messageDurationInput.value = String(config.messageDurationSeconds);
@@ -991,6 +1190,7 @@ function openScreenModal(index = null) {
   screenModalTitle.textContent = index === null ? 'Add Screen' : `Edit ${getScreenTitle(draft, index)}`;
   screenTypeSelect.value = draft.type;
   screenNameInput.value = draft.name || '';
+  screenSlugInput.value = draft.slug || slugify(draft.name || `screen-${index === null ? screenDrafts.length + 1 : index + 1}`);
 
   renderManualFields(draft.type === 'manual' ? draft.lines : []);
   populatePluginSelect(draft.pluginId);
@@ -1273,6 +1473,11 @@ function upsertScreenDraft(index, screen) {
 
 function switchPage(pageId) {
   activePage = pageId;
+  const hideBoardSelector = pageId === 'home';
+
+  if (workspaceHeaderActions) {
+    workspaceHeaderActions.classList.toggle('hidden', hideBoardSelector);
+  }
 
   for (const navButton of navButtons) {
     const isActive = navButton.dataset.pageTarget === pageId;
@@ -1280,7 +1485,8 @@ function switchPage(pageId) {
 
     if (isActive) {
       navButton.setAttribute('aria-current', 'page');
-      workspaceTitle.textContent = navButton.dataset.pageTitle;
+      const boardName = !hideBoardSelector && currentConfig?.name ? ` · ${currentConfig.name}` : '';
+      workspaceTitle.textContent = `${navButton.dataset.pageTitle}${boardName}`;
     } else {
       navButton.removeAttribute('aria-current');
     }
@@ -1289,6 +1495,76 @@ function switchPage(pageId) {
   for (const pagePanel of pagePanels) {
     pagePanel.classList.toggle('hidden', pagePanel.dataset.page !== pageId);
   }
+}
+
+function renderHomeBoardCards() {
+  if (!homeBoardGrid) {
+    return;
+  }
+
+  homeBoardGrid.replaceChildren();
+
+  if (availableBoards.length === 0) {
+    homeBoardGrid.append(buildEmptyState('No boards configured yet.'));
+    return;
+  }
+
+  for (const board of availableBoards) {
+    const card = document.createElement('article');
+    card.className = 'board-overview-card';
+
+    const header = document.createElement('div');
+    header.className = 'board-overview-header';
+
+    const actions = document.createElement('div');
+    actions.className = 'board-overview-actions';
+
+    const title = document.createElement('h3');
+    title.className = 'board-overview-title';
+    title.textContent = board.name;
+    header.append(title);
+
+    const count = document.createElement('p');
+    count.className = 'board-overview-count';
+    count.textContent = `${board.screenCount} ${pluralize('screen', board.screenCount)}`;
+
+    if (board.isDefault) {
+      const defaultIcon = document.createElement('span');
+      defaultIcon.className = 'board-status-icon';
+      defaultIcon.setAttribute('aria-label', 'Default board');
+      defaultIcon.title = 'Default board';
+      defaultIcon.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9L12 3z" />
+        </svg>
+      `;
+      actions.append(defaultIcon);
+    }
+
+    const openLink = document.createElement('a');
+    openLink.className = 'screen-icon-button';
+    openLink.href = buildBoardDisplayUrl(board.slug);
+    openLink.target = '_blank';
+    openLink.rel = 'noopener noreferrer';
+    openLink.setAttribute('aria-label', `Open ${board.name}`);
+    openLink.title = `Open ${board.name}`;
+    openLink.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M14 5h5v5" />
+        <path d="M10 14L19 5" />
+        <path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
+      </svg>
+    `;
+    actions.append(openLink);
+
+    header.append(actions);
+    card.append(header, count);
+    homeBoardGrid.append(card);
+  }
+}
+
+function buildBoardDisplayUrl(boardSlug) {
+  return `/${encodeURIComponent(boardSlug)}`;
 }
 
 function markScreensDirty(message) {
@@ -1371,6 +1647,7 @@ function serializeScreenForSave(screen) {
   if (screen.type === 'manual') {
     return {
       id: screen.id,
+      slug: screen.slug,
       type: 'manual',
       name: screen.name || '',
       enabled: true,
@@ -1380,6 +1657,7 @@ function serializeScreenForSave(screen) {
 
   return {
     id: screen.id,
+    slug: screen.slug,
     type: 'plugin',
     name: screen.name || '',
     enabled: true,
@@ -1393,6 +1671,7 @@ function serializeScreenForSave(screen) {
 function buildDefaultManualDraft() {
   return {
     id: createLocalScreenId(),
+    slug: '',
     type: 'manual',
     name: '',
     enabled: true,
@@ -1450,6 +1729,15 @@ function createLocalScreenId() {
     return window.crypto.randomUUID();
   }
   return `screen-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function slugify(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 function clone(value) {

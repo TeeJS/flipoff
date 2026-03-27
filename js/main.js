@@ -12,7 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
 async function bootstrap() {
   const boardContainer = document.getElementById('board-container');
   const soundEngine = new SoundEngine();
-  const remoteSync = new RemoteMessageSync(handleRealtimeEvent);
+  const remoteSync = new RemoteMessageSync(handleRealtimeEvent, resolveBoardSlugFromPath());
   const displayConfig = await remoteSync.fetchConfig() || cloneConfig(DEFAULT_DISPLAY_CONFIG);
   const configSignature = serializeConfig(displayConfig);
 
@@ -129,10 +129,21 @@ function cloneConfig(config) {
 
 function serializeConfig(config) {
   return JSON.stringify({
+    boardSlug: config.boardSlug,
     cols: config.cols,
     rows: config.rows,
     messageDurationSeconds: config.messageDurationSeconds,
     apiMessageDurationSeconds: config.apiMessageDurationSeconds,
     defaultMessages: config.defaultMessages,
   });
+}
+
+function resolveBoardSlugFromPath() {
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/' || path === '/index.html') {
+    return null;
+  }
+
+  const [, candidate] = path.split('/');
+  return candidate || null;
 }

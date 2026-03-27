@@ -7,7 +7,7 @@ from pathlib import Path
 from aiohttp.test_utils import AioHTTPTestCase
 
 from plugins.base import PluginField, PluginManifest, PluginRefreshResult, ScreenPlugin
-from server import ADMIN_PASSWORD_STATE_KEY, DISPLAY_CONFIG_KEY, create_app
+from server import ADMIN_PASSWORD_STATE_KEY, create_app
 
 
 class FakeForecastPlugin(ScreenPlugin):
@@ -233,7 +233,7 @@ class FlipOffServerTests(AioHTTPTestCase):
         public_payload = await public_config.json()
         self.assertEqual(public_payload['defaultMessages'][0], ['WELCOME HOME', 'SIMON', '', '', ''])
         self.assertEqual(
-            json.loads(self.screens_path.read_text(encoding='utf-8'))['screens'][0]['lines'],
+            json.loads(self.screens_path.read_text(encoding='utf-8'))['boards'][0]['screens'][0]['lines'],
             ['WELCOME HOME', 'SIMON'],
         )
 
@@ -351,10 +351,17 @@ class FlipOffServerTests(AioHTTPTestCase):
         self.assertEqual(
             stored_payload,
             {
-                'cols': 18,
-                'rows': 5,
-                'messageDurationSeconds': 4,
-                'apiMessageDurationSeconds': 30,
+                'defaultBoardSlug': 'main',
+                'boards': [
+                    {
+                        'slug': 'main',
+                        'name': 'Main Board',
+                        'cols': 18,
+                        'rows': 5,
+                        'messageDurationSeconds': 4,
+                        'apiMessageDurationSeconds': 30,
+                    }
+                ],
                 'adminPassword': 'secret-password',
                 'pluginCommonSettings': {
                     'forecast': {
@@ -464,6 +471,75 @@ class FlipOffServerTests(AioHTTPTestCase):
         self.assertEqual(updated_config_event['payload']['defaultMessages'][0], ['HELLO', 'WORLD', '', '', ''])
 
         await ws.close()
+
+    async def test_board_specific_config_and_default_board_switch(self):
+        await self.authenticate()
+        create_response = await self.client.post(
+            '/api/admin/boards',
+            json={'name': 'Lobby Board', 'slug': 'lobby-board'},
+        )
+        self.assertEqual(create_response.status, 200)
+
+        update_response = await self.client.put(
+            '/api/admin/config?board=lobby-board',
+            json={
+                'name': 'Lobby Board',
+                'slug': 'lobby-board',
+                'isDefault': True,
+                'cols': 22,
+                'rows': 5,
+                'messageDurationSeconds': 9,
+                'apiMessageDurationSeconds': 30,
+            },
+        )
+        self.assertEqual(update_response.status, 200)
+
+        default_config = await self.client.get('/api/config')
+        default_payload = await default_config.json()
+        self.assertEqual(default_payload['boardSlug'], 'lobby-board')
+        self.assertEqual(default_payload['cols'], 22)
+
+        board_page = await self.client.get('/lobby-board')
+        self.assertEqual(board_page.status, 200)
+
+    async def test_post_message_can_target_manual_screen_by_slugs(self):
+        await self.authenticate()
+        await self.client.put(
+            '/api/admin/screens',
+            json={
+                'pluginCommonSettings': {},
+                'screens': [
+                    {
+                        'type': 'manual',
+                        'name': 'Welcome',
+                        'slug': 'welcome-screen',
+                        'enabled': True,
+                        'lines': ['initial copy'],
+                    }
+                ],
+            },
+        )
+
+        response = await self.client.post(
+            '/api/message',
+            json={
+                'boardSlug': 'main',
+                'screenSlug': 'welcome-screen',
+                'message': 'screen specific update',
+            },
+        )
+        self.assertEqual(response.status, 200)
+
+        payload = await response.json()
+        self.assertEqual(payload['boardSlug'], 'main')
+        self.assertEqual(payload['screen']['slug'], 'welcome-screen')
+        self.assertEqual(payload['screen']['previewLines'][1], 'SCREEN SPECIFIC')
+        self.assertEqual(payload['screen']['previewLines'][2], 'UPDATE')
+
+        public_config = await self.client.get('/api/config')
+        public_payload = await public_config.json()
+        self.assertEqual(public_payload['defaultMessages'][0][1], 'SCREEN SPECIFIC')
+        self.assertEqual(public_payload['defaultMessages'][0][2], 'UPDATE')
 
 
 class FlipOffPasswordBootstrapTests(unittest.TestCase):
