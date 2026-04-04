@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+tests/
+screenshot.png
+README.md
+PLUGINS.md
+.DS_Store
+Dockerfile
+docker-compose.yml
+.dockerignore
+.github
