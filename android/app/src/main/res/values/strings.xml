@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FlipOff.</string>
+    <string name="settings_title">FlipOff. TV Setup</string>
+    <string name="server_url_hint">http://192.168.1.x:8080</string>
+    <string name="save_and_launch">Save &amp; Launch</string>
+    <string name="error_invalid_url">Enter a valid URL starting with http:// or https://</string>
+</resources>

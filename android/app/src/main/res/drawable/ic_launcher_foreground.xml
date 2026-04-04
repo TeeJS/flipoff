@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- "F" letterform centered in adaptive icon safe zone -->
+    <path
+        android:fillColor="#FFD600"
+        android:pathData="M36,30 L36,78 L44,78 L44,58 L68,58 L68,50 L44,50 L44,38 L72,38 L72,30 Z" />
+
+    <!-- Dot -->
+    <path
+        android:fillColor="#FFD600"
+        android:pathData="M74,72 a4,4 0 1,1 8,0 a4,4 0 1,1 -8,0" />
+</vector>

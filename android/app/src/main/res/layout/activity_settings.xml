@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="48dp"
+    android:background="@color/background">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/settings_title"
+        android:textColor="@color/text_primary"
+        android:textSize="32sp"
+        android:layout_marginBottom="32dp" />
+
+    <EditText
+        android:id="@+id/editServerUrl"
+        android:layout_width="400dp"
+        android:layout_height="wrap_content"
+        android:hint="@string/server_url_hint"
+        android:inputType="textUri"
+        android:textColor="@color/text_primary"
+        android:textColorHint="#888888"
+        android:backgroundTint="@color/accent"
+        android:padding="16dp"
+        android:textSize="20sp"
+        android:nextFocusDown="@+id/btnSave" />
+
+    <TextView
+        android:id="@+id/txtError"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="#FF5252"
+        android:textSize="14sp"
+        android:layout_marginTop="8dp"
+        android:visibility="gone" />
+
+    <Button
+        android:id="@+id/btnSave"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/save_and_launch"
+        android:layout_marginTop="24dp"
+        android:textSize="18sp"
+        android:nextFocusUp="@id/editServerUrl" />
+
+</LinearLayout>
