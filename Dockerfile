@@ -9,6 +9,8 @@ RUN pip install --no-cache-dir --prefix=/install -r /tmp/requirements.txt
 # ---- Stage 2: Runtime ----
 FROM python:3.13-alpine
 
+RUN apk add --no-cache su-exec
+
 COPY --from=builder /install /usr/local
 
 RUN adduser -D -u 1000 flipoff
@@ -21,11 +23,11 @@ COPY admin.html .
 COPY css/ css/
 COPY js/ js/
 COPY plugins/ plugins/
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
 
 RUN mkdir -p /home/flipoff/.flipoff \
     && chown -R flipoff:flipoff /home/flipoff/.flipoff
-
-USER flipoff
 
 EXPOSE 8080
 VOLUME ["/home/flipoff/.flipoff"]
@@ -35,4 +37,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 
 STOPSIGNAL SIGTERM
 
-CMD ["python", "server.py"]
+ENTRYPOINT ["./entrypoint.sh"]
