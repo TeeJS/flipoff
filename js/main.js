@@ -6,10 +6,6 @@ import { RemoteMessageSync } from './RemoteMessageSync.js';
 import { DEFAULT_DISPLAY_CONFIG } from './constants.js';
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Auto-enter fullscreen mode when ?tv=1 is set (e.g. Android TV WebView)
-  if (new URLSearchParams(window.location.search).get('tv') === '1') {
-    document.documentElement.classList.add('fullscreen-active');
-  }
   void bootstrap();
 });
 

@@ -38,10 +38,6 @@ class MainActivity : AppCompatActivity() {
             serverUrl = serverUrl.trimEnd('/') + "/main"
         }
 
-        // Append ?tv=1 to auto-enter fullscreen board mode
-        val separator = if (serverUrl.contains('?')) "&" else "?"
-        serverUrl = "$serverUrl${separator}tv=1"
-
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         webView = WebView(this).apply {
@@ -82,14 +78,13 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         enterImmersiveMode()
         // Reload in case URL was changed in settings
-        val savedUrl = prefs.getString("server_url", null)
-        if (!savedUrl.isNullOrBlank()) {
-            var url = savedUrl
+        val serverUrl = prefs.getString("server_url", null)
+        if (!serverUrl.isNullOrBlank()) {
+            var url = serverUrl
             if (url.trimEnd('/').matches(Regex("^https?://[^/]+(:\\d+)?$"))) {
                 url = url.trimEnd('/') + "/main"
             }
-            val sep = if (url.contains('?')) "&" else "?"
-            webView?.loadUrl("$url${sep}tv=1")
+            webView?.loadUrl(url)
         }
     }
 
