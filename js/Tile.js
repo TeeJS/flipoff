@@ -67,12 +67,7 @@ export class Tile {
         const color = SCRAMBLE_COLORS[scrambleCount % SCRAMBLE_COLORS.length];
         this.frontEl.style.backgroundColor = color;
 
-        // Briefly change text color for contrast on light backgrounds
-        if (color === '#FFFFFF' || color === '#FFCC00') {
-          this.frontSpan.style.color = '#111';
-        } else {
-          this.frontSpan.style.color = '';
-        }
+        this.frontSpan.style.color = '';
 
         scrambleCount++;
 

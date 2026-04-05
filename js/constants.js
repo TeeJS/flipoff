@@ -10,7 +10,7 @@ export const TOTAL_TRANSITION = 3800;
 export const CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,-!?\'/: ';
 
 export const SCRAMBLE_COLORS = [
-  '#FFFFFF', '#111111'
+  '#111111'
 ];
 
 export const ACCENT_COLORS = [
