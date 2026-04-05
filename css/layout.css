@@ -140,6 +140,15 @@
   display: none;
 }
 
+.fullscreen-active .page-frame {
+  max-width: none;
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: #111;
+  min-height: 100vh;
+}
+
 .fullscreen-active .board-section {
   padding: 0;
   height: 100vh;
