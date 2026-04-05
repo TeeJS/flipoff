@@ -50,7 +50,7 @@ WEATHER_CODE_LABELS = {
 class OpenMeteoForecastPlugin(ScreenPlugin):
     manifest = PluginManifest(
         plugin_id='weatherbit_forecast',
-        name='Open-Meteo 3 Day Forecast',
+        name='Open-Meteo 5 Day Forecast',
         description='Fetch a three day weather forecast from Open-Meteo and render it as a screen.',
         default_refresh_interval_seconds=3600,
         settings_schema=(
@@ -144,7 +144,7 @@ class OpenMeteoForecastPlugin(ScreenPlugin):
                 'latitude': location.get('latitude'),
                 'longitude': location.get('longitude'),
                 'daily': 'weather_code,temperature_2m_max,temperature_2m_min',
-                'forecast_days': 3,
+                'forecast_days': 5,
                 'temperature_unit': temperature_unit,
                 'timezone': location.get('timezone') or 'auto',
             },
@@ -162,8 +162,8 @@ class OpenMeteoForecastPlugin(ScreenPlugin):
         max_temps = daily.get('temperature_2m_max')
         min_temps = daily.get('temperature_2m_min')
         weather_codes = daily.get('weather_code')
-        if not all(isinstance(series, list) and len(series) >= 3 for series in (dates, max_temps, min_temps, weather_codes)):
-            raise ValueError('Open-Meteo did not return a complete three day forecast.')
+        if not all(isinstance(series, list) and len(series) >= 5 for series in (dates, max_temps, min_temps, weather_codes)):
+            raise ValueError('Open-Meteo did not return a complete five day forecast.')
 
         show_conditions = bool(design.get('showConditions', True))
         unit_symbol = 'F' if units == 'I' else 'C'
@@ -178,7 +178,7 @@ class OpenMeteoForecastPlugin(ScreenPlugin):
                 },
                 unit_symbol,
             )
-            for index in range(3)
+            for index in range(5)
         ]
         lines = self._format_forecast_rows(rows, context.cols, show_conditions)
         lines = self.with_optional_title(lines, design=design, context=context)
