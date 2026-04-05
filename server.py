@@ -1265,7 +1265,7 @@ async def board_handler(request: web.Request) -> web.Response:
 
     if get_board(request.app, board_slug) is None:
         return _json_error('Board not found.', status=404)
-    return web.FileResponse(PROJECT_ROOT / 'index.html')
+    return web.FileResponse(PROJECT_ROOT / 'board.html')
 
 
 async def admin_handler(_: web.Request) -> web.Response:

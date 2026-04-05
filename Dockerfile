@@ -20,6 +20,7 @@ WORKDIR /app
 COPY server.py .
 COPY index.html .
 COPY admin.html .
+COPY board.html .
 COPY css/ css/
 COPY js/ js/
 COPY plugins/ plugins/
