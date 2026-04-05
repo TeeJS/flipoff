@@ -63,21 +63,11 @@ export class Tile {
         const randChar = CHARSET[Math.floor(Math.random() * CHARSET.length)];
         this.frontSpan.textContent = randChar === ' ' ? '' : randChar;
 
-        // Cycle background color
-        const color = SCRAMBLE_COLORS[scrambleCount % SCRAMBLE_COLORS.length];
-        this.frontEl.style.backgroundColor = color;
-
-        this.frontSpan.style.color = '';
-
         scrambleCount++;
 
         if (scrambleCount >= maxScrambles) {
           window.clearInterval(this._scrambleTimer);
           this._scrambleTimer = null;
-
-          // Reset colors
-          this.frontEl.style.backgroundColor = '';
-          this.frontSpan.style.color = '';
 
           // Set the final character directly (skip 3D flip for reliability)
           // Use a brief opacity flash to simulate the flip settle
