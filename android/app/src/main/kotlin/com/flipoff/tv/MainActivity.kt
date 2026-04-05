@@ -33,7 +33,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        enterImmersiveMode()
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -47,6 +46,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         setContentView(webView)
+        enterImmersiveMode()
         webView?.loadUrl(serverUrl)
     }
 
