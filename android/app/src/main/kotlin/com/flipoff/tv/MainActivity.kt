@@ -17,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity
 class MainActivity : AppCompatActivity() {
 
     private var webView: WebView? = null
+    private var selectPressedAt: Long = 0
 
     private val prefs by lazy {
         getSharedPreferences("flipoff_prefs", MODE_PRIVATE)
@@ -25,11 +26,16 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val serverUrl = prefs.getString("server_url", null)
+        var serverUrl = prefs.getString("server_url", null)
         if (serverUrl.isNullOrBlank()) {
             startActivity(Intent(this, SettingsActivity::class.java))
             finish()
             return
+        }
+
+        // Default to /main board if pointing at the root
+        if (serverUrl.trimEnd('/').matches(Regex("^https?://[^/]+(:\\d+)?$"))) {
+            serverUrl = serverUrl.trimEnd('/') + "/main"
         }
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -51,9 +57,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_MENU) {
-            startActivity(Intent(this, SettingsActivity::class.java))
-            return true
+        // Long-press Select/OK (2 seconds) opens settings
+        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+            if (event?.repeatCount == 0) {
+                selectPressedAt = System.currentTimeMillis()
+            } else if (System.currentTimeMillis() - selectPressedAt >= 2000) {
+                selectPressedAt = Long.MAX_VALUE // prevent re-triggering
+                startActivity(Intent(this, SettingsActivity::class.java))
+                return true
+            }
         }
         if (keyCode == KeyEvent.KEYCODE_BACK && webView?.canGoBack() == true) {
             webView?.goBack()
@@ -65,6 +77,15 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         enterImmersiveMode()
+        // Reload in case URL was changed in settings
+        val serverUrl = prefs.getString("server_url", null)
+        if (!serverUrl.isNullOrBlank()) {
+            var url = serverUrl
+            if (url.trimEnd('/').matches(Regex("^https?://[^/]+(:\\d+)?$"))) {
+                url = url.trimEnd('/') + "/main"
+            }
+            webView?.loadUrl(url)
+        }
     }
 
     override fun onDestroy() {
