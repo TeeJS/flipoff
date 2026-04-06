@@ -108,8 +108,8 @@ class HomeAssistantAgendaPlugin(ScreenPlugin):
                 date_time = state
                 event_name = ''
 
-            lines.append(date_time[:context.cols])
-            lines.append(event_name[:context.cols])
+            lines.append(date_time[:context.cols].ljust(context.cols))
+            lines.append(event_name[:context.cols].ljust(context.cols))
 
         return PluginRefreshResult(
             lines=lines[:context.rows],
