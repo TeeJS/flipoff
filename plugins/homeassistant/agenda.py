@@ -10,7 +10,7 @@ from ..base import (
     ScreenPlugin,
 )
 
-NUM_LINES = 6
+NUM_EVENTS = 4
 
 
 class HomeAssistantAgendaPlugin(ScreenPlugin):
@@ -43,7 +43,7 @@ class HomeAssistantAgendaPlugin(ScreenPlugin):
                 field_type='text',
                 default='input_text.agenda_line_',
                 required=True,
-                help_text='Prefix for numbered entities (1-6 appended).',
+                help_text='Prefix for numbered entities (1-4 appended).',
             ),
         ),
         design_schema=(
@@ -81,19 +81,36 @@ class HomeAssistantAgendaPlugin(ScreenPlugin):
         }
 
         lines: list[str] = []
-        for i in range(1, NUM_LINES + 1):
+        for i in range(1, NUM_EVENTS + 1):
             entity_id = f'{entity_prefix}{i}'
             url = f'{ha_url}/api/states/{entity_id}'
 
             async with http_session.get(url, headers=headers) as response:
                 if not response.ok:
                     lines.append('')
+                    lines.append('')
                     continue
                 data = await response.json(content_type=None)
                 state = str(data.get('state') or '').strip().upper()
-                lines.append(state[:context.cols])
 
-        lines = self.with_optional_title(lines, design=design, context=context)
+            # Split on | — expected format: "04/06 | 10:00 AM | EVENT NAME"
+            parts = [p.strip() for p in state.split('|')]
+
+            if len(parts) >= 3:
+                # Row 1: date + time (e.g. "04/06  10:00 AM")
+                date_time = f'{parts[0]}  {parts[1]}'
+                # Row 2: event name
+                event_name = parts[2]
+            elif len(parts) == 2:
+                date_time = parts[0]
+                event_name = parts[1]
+            else:
+                date_time = state
+                event_name = ''
+
+            lines.append(date_time[:context.cols])
+            lines.append(event_name[:context.cols])
+
         return PluginRefreshResult(
             lines=lines[:context.rows],
             meta={},
