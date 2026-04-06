@@ -224,6 +224,7 @@ def normalize_message_lines(
     rows: int,
     field_name: str,
     allow_empty: bool = False,
+    preserve_trailing_spaces: bool = False,
 ) -> list[str]:
     if not isinstance(lines, list):
         raise ValueError(f"'{field_name}' must be an array of strings.")
@@ -236,7 +237,10 @@ def normalize_message_lines(
     for index, line in enumerate(lines, start=1):
         if not isinstance(line, str):
             raise ValueError(f"{field_name} line {index} must be a string.")
-        normalized_line = line.strip().upper()
+        if preserve_trailing_spaces:
+            normalized_line = line.lstrip().upper()
+        else:
+            normalized_line = line.strip().upper()
         if len(normalized_line) > cols:
             raise ValueError(f"{field_name} line {index} exceeds {cols} characters.")
         normalized.append(normalized_line)
@@ -1174,6 +1178,7 @@ async def refresh_plugin_screen(
             cols=config.cols,
             rows=config.rows,
             field_name=f"plugin screen '{screen['slug']}'",
+            preserve_trailing_spaces=True,
         )
         screen['pluginState'] = result.meta.copy()
         screen['lastRefreshedAt'] = _utc_now()
