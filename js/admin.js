@@ -1655,6 +1655,7 @@ function serializeScreenForSave(screen) {
       type: 'manual',
       name: screen.name || '',
       enabled: true,
+      alignment: screen.alignment || 'center',
       lines: screen.lines,
     };
   }
@@ -1665,6 +1666,7 @@ function serializeScreenForSave(screen) {
     type: 'plugin',
     name: screen.name || '',
     enabled: true,
+    alignment: screen.alignment || 'center',
     pluginId: screen.pluginId,
     refreshIntervalSeconds: screen.refreshIntervalSeconds,
     settings: screen.settings || {},
