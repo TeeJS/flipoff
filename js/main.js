@@ -20,6 +20,7 @@ async function bootstrap() {
   const board = new Board(boardContainer, soundEngine, displayConfig);
   const rotator = new MessageRotator(board, {
     messages: displayConfig.defaultMessages,
+    alignments: displayConfig.defaultAlignments || [],
     messageDurationSeconds: displayConfig.messageDurationSeconds,
   });
   const keyboard = new KeyboardController(rotator, soundEngine);

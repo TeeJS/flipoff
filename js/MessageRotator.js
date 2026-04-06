@@ -3,9 +3,10 @@ import { DEFAULT_MESSAGES, TOTAL_TRANSITION } from './constants.js';
 const DEFAULT_MESSAGE_DURATION_SECONDS = 4;
 
 export class MessageRotator {
-  constructor(board, { messages = DEFAULT_MESSAGES, messageDurationSeconds = DEFAULT_MESSAGE_DURATION_SECONDS } = {}) {
+  constructor(board, { messages = DEFAULT_MESSAGES, alignments = [], messageDurationSeconds = DEFAULT_MESSAGE_DURATION_SECONDS } = {}) {
     this.board = board;
     this.messages = messages.map((message) => [...message]);
+    this.alignments = alignments.length ? [...alignments] : messages.map(() => 'center');
     this.messageDurationSeconds = Number(messageDurationSeconds) || DEFAULT_MESSAGE_DURATION_SECONDS;
     this.currentIndex = -1;
     this._timer = null;
@@ -33,7 +34,7 @@ export class MessageRotator {
     if (this._remoteOverride || this.messages.length === 0) return;
 
     this.currentIndex = (this.currentIndex + 1) % this.messages.length;
-    this.board.displayMessage(this.messages[this.currentIndex], options);
+    this.board.displayMessage(this.messages[this.currentIndex], { alignment: this.alignments[this.currentIndex] || 'center', ...options });
     this._resetAutoRotation();
   }
 
@@ -41,12 +42,13 @@ export class MessageRotator {
     if (this._remoteOverride || this.messages.length === 0) return;
 
     this.currentIndex = (this.currentIndex - 1 + this.messages.length) % this.messages.length;
-    this.board.displayMessage(this.messages[this.currentIndex], options);
+    this.board.displayMessage(this.messages[this.currentIndex], { alignment: this.alignments[this.currentIndex] || 'center', ...options });
     this._resetAutoRotation();
   }
 
-  setMessages(messages) {
+  setMessages(messages, alignments = []) {
     this.messages = Array.isArray(messages) ? messages.map((message) => [...message]) : [];
+    this.alignments = alignments.length ? [...alignments] : this.messages.map(() => 'center');
     if (this.currentIndex >= this.messages.length) {
       this.currentIndex = -1;
     }

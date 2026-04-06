@@ -33,6 +33,7 @@ const screenTypeSelect = document.getElementById('screen-type-select');
 const screenTypeButtons = Array.from(document.querySelectorAll('[data-screen-type-value]'));
 const screenNameInput = document.getElementById('screen-name-input');
 const screenSlugInput = document.getElementById('screen-slug-input');
+const screenAlignmentInput = document.getElementById('screen-alignment-input');
 const manualScreenFields = document.getElementById('manual-screen-fields');
 const pluginScreenFields = document.getElementById('plugin-screen-fields');
 const screenLineFields = document.getElementById('screen-line-fields');
@@ -692,6 +693,7 @@ function handleSaveScreenModal(event) {
       type: 'manual',
       name,
       enabled: true,
+      alignment: screenAlignmentInput.value,
       lines: lines.slice(0, lastPopulatedIndex + 1),
     });
     closeScreenModal();
@@ -724,6 +726,7 @@ function handleSaveScreenModal(event) {
     type: 'plugin',
     name,
     enabled: true,
+    alignment: screenAlignmentInput.value,
     pluginId: plugin.id,
     pluginName: plugin.name,
     refreshIntervalSeconds: refreshMinutes * 60,
@@ -1191,6 +1194,7 @@ function openScreenModal(index = null) {
   screenTypeSelect.value = draft.type;
   screenNameInput.value = draft.name || '';
   screenSlugInput.value = draft.slug || slugify(draft.name || `screen-${index === null ? screenDrafts.length + 1 : index + 1}`);
+  screenAlignmentInput.value = draft.alignment || 'center';
 
   renderManualFields(draft.type === 'manual' ? draft.lines : []);
   populatePluginSelect(draft.pluginId);

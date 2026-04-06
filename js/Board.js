@@ -97,16 +97,17 @@ export class Board {
     });
   }
 
-  displayMessage(lines, { interrupt = false } = {}) {
+  displayMessage(lines, { interrupt = false, alignment = 'center' } = {}) {
     if (interrupt) {
       this.interruptTransition();
     } else if (this.isTransitioning) {
       this.pendingLines = [...lines];
+      this.pendingAlignment = alignment;
       return;
     }
 
     // Format lines into grid
-    const newGrid = this._formatToGrid(lines);
+    const newGrid = this._formatToGrid(lines, alignment);
 
     // Determine which tiles need to change
     let hasChanges = false;
@@ -148,8 +149,10 @@ export class Board {
       this.isTransitioning = false;
       if (this.pendingLines) {
         const nextLines = this.pendingLines;
+        const nextAlignment = this.pendingAlignment || 'center';
         this.pendingLines = null;
-        this.displayMessage(nextLines);
+        this.pendingAlignment = null;
+        this.displayMessage(nextLines, { alignment: nextAlignment });
       }
     }, TOTAL_TRANSITION + 200);
   }
@@ -172,12 +175,19 @@ export class Board {
     this.currentGrid = this.tiles.map((row) => row.map((tile) => tile.currentChar));
   }
 
-  _formatToGrid(lines) {
+  _formatToGrid(lines, alignment = 'center') {
     const grid = [];
     for (let r = 0; r < this.rows; r++) {
       const line = (lines[r] || '').toUpperCase();
       const padTotal = this.cols - line.length;
-      const padLeft = Math.max(0, Math.floor(padTotal / 2));
+      let padLeft;
+      if (alignment === 'left') {
+        padLeft = 0;
+      } else if (alignment === 'right') {
+        padLeft = Math.max(0, padTotal);
+      } else {
+        padLeft = Math.max(0, Math.floor(padTotal / 2));
+      }
       const padded = ' '.repeat(padLeft) + line + ' '.repeat(Math.max(0, this.cols - padLeft - line.length));
       grid.push(padded.split(''));
     }

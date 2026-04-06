@@ -50,8 +50,9 @@ class DisplayConfig:
     cols: int
     rows: int
     default_messages: list[list[str]]
-    message_duration_seconds: int
-    api_message_duration_seconds: int
+    default_alignments: list[str] = field(default_factory=list)
+    message_duration_seconds: int = 4
+    api_message_duration_seconds: int = 30
 
     def serialize(self) -> dict[str, Any]:
         return {
@@ -60,6 +61,7 @@ class DisplayConfig:
             'cols': self.cols,
             'rows': self.rows,
             'defaultMessages': [message.copy() for message in self.default_messages],
+            'defaultAlignments': self.default_alignments.copy(),
             'messageDurationSeconds': self.message_duration_seconds,
             'apiMessageDurationSeconds': self.api_message_duration_seconds,
         }
@@ -224,7 +226,6 @@ def normalize_message_lines(
     rows: int,
     field_name: str,
     allow_empty: bool = False,
-    preserve_trailing_spaces: bool = False,
 ) -> list[str]:
     if not isinstance(lines, list):
         raise ValueError(f"'{field_name}' must be an array of strings.")
@@ -237,10 +238,7 @@ def normalize_message_lines(
     for index, line in enumerate(lines, start=1):
         if not isinstance(line, str):
             raise ValueError(f"{field_name} line {index} must be a string.")
-        if preserve_trailing_spaces:
-            normalized_line = line.lstrip().upper()
-        else:
-            normalized_line = line.strip().upper()
+        normalized_line = line.strip().upper()
         if len(normalized_line) > cols:
             raise ValueError(f"{field_name} line {index} exceeds {cols} characters.")
         normalized.append(normalized_line)
@@ -639,6 +637,9 @@ def normalize_screens_payload(
         screen_type = raw_screen.get('type')
         name = _coerce_optional_string(raw_screen.get('name'), f'screens[{index}].name')
         enabled = _coerce_bool(raw_screen.get('enabled', True), f'screens[{index}].enabled')
+        alignment = raw_screen.get('alignment', 'center')
+        if alignment not in ('left', 'center', 'right'):
+            alignment = 'center'
 
         if screen_type == 'manual':
             normalized_screens.append(
@@ -648,6 +649,7 @@ def normalize_screens_payload(
                     'type': 'manual',
                     'name': name,
                     'enabled': enabled,
+                    'alignment': alignment,
                     'lines': normalize_message_lines(
                         raw_screen.get('lines'),
                         cols=config.cols,
@@ -686,6 +688,7 @@ def normalize_screens_payload(
                     'type': 'plugin',
                     'name': name,
                     'enabled': enabled,
+                    'alignment': alignment,
                     'pluginId': plugin_id,
                     'refreshIntervalSeconds': refresh_interval_seconds,
                     'settings': normalize_schema_values(
@@ -793,17 +796,19 @@ def resolve_default_messages(
     screens: list[dict[str, Any]],
     config: DisplayConfig,
     plugins: dict[str, ScreenPlugin],
-) -> list[list[str]]:
-    messages = [
-        resolve_screen_lines(screen, config, plugins)
-        for screen in screens
-        if screen.get('enabled', True)
-    ]
-    return messages or normalize_default_messages([['NO SCREENS']], config.cols, config.rows)
+) -> tuple[list[list[str]], list[str]]:
+    enabled = [s for s in screens if s.get('enabled', True)]
+    messages = [resolve_screen_lines(s, config, plugins) for s in enabled]
+    alignments = [s.get('alignment', 'center') for s in enabled]
+    if not messages:
+        return normalize_default_messages([['NO SCREENS']], config.cols, config.rows), ['center']
+    return messages, alignments
 
 
 def sync_board_display_messages(board: BoardState, plugins: dict[str, ScreenPlugin]) -> None:
-    board.config.default_messages = resolve_default_messages(board.screens, board.config, plugins)
+    messages, alignments = resolve_default_messages(board.screens, board.config, plugins)
+    board.config.default_messages = messages
+    board.config.default_alignments = alignments
 
 
 def sync_all_display_messages(app: web.Application) -> None:
@@ -883,6 +888,7 @@ def serialize_screen_for_admin(
         'type': screen['type'],
         'name': screen.get('name', ''),
         'enabled': screen.get('enabled', True),
+        'alignment': screen.get('alignment', 'center'),
         'previewLines': resolve_screen_lines(screen, config, plugins),
     }
 
@@ -1178,7 +1184,6 @@ async def refresh_plugin_screen(
             cols=config.cols,
             rows=config.rows,
             field_name=f"plugin screen '{screen['slug']}'",
-            preserve_trailing_spaces=True,
         )
         screen['pluginState'] = result.meta.copy()
         screen['lastRefreshedAt'] = _utc_now()
