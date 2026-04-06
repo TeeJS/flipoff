@@ -33,3 +33,8 @@ github/lib/*
 weather/*
 !weather/__init__.py
 !weather/open_meteo_forecast.py
+
+!homeassistant/
+homeassistant/*
+!homeassistant/__init__.py
+!homeassistant/agenda.py
