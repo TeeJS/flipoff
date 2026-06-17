@@ -47,7 +47,10 @@
   transform: rotateX(180deg);
 }
 
-/* Horizontal Split Line — subtle mechanical seam */
+/* Horizontal Split Line — mechanical seam.
+   Height scales with tile size so the crease reads consistently from small
+   boards up to large bar-screen tiles, instead of a fixed 1px that vanishes
+   on big tiles. */
 .tile-front::after,
 .tile-back::after {
   content: '';
@@ -55,9 +58,16 @@
   left: 0;
   right: 0;
   top: 50%;
-  height: 1px;
-  background: rgba(0, 0, 0, 0.3);
+  height: max(1px, calc(var(--tile-size) * 0.03));
+  background: rgba(0, 0, 0, 0.55);
   pointer-events: none;
+}
+
+/* Lower-flap highlight — only on large bar-mode (?bare=1) tiles, where the
+   extra mechanical bevel is visible. No effect on smaller boards. */
+body.bare .tile-front::after,
+body.bare .tile-back::after {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 /* Highlight Sweep (metallic reflection during flip) */
