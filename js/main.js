@@ -11,6 +11,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function bootstrap() {
   const boardContainer = document.getElementById('board-container');
+
+  // Bare mode (?bare=1): strip all chrome and let the tiles fill the viewport.
+  if (new URLSearchParams(window.location.search).has('bare')) {
+    document.body.classList.add('bare');
+  }
+
   const soundEngine = new SoundEngine();
   const remoteSync = new RemoteMessageSync(handleRealtimeEvent, resolveBoardSlugFromPath());
   const displayConfig = await remoteSync.fetchConfig() || cloneConfig(DEFAULT_DISPLAY_CONFIG);

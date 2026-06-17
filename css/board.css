@@ -117,3 +117,34 @@
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.15);
 }
+
+/* Bare / chromeless mode (?bare=1) — tiles only, filling the viewport.
+   Sizes square tiles to the smaller of the width/height fit so the grid fills
+   any aspect ratio (e.g. a 1920x480 4:1 bar screen). */
+body.bare {
+  background: #000;
+}
+
+body.bare .board {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  --tile-gap: 4px;
+  --tile-size: min(
+    (100vw - (var(--grid-cols) - 1) * var(--tile-gap)) / var(--grid-cols),
+    (100vh - (var(--grid-rows) - 1) * var(--tile-gap)) / var(--grid-rows)
+  );
+}
+
+body.bare .accent-bar,
+body.bare .keyboard-hint,
+body.bare .shortcuts-overlay,
+body.bare .board::after {
+  display: none;
+}
