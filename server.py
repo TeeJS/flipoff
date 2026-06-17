@@ -638,7 +638,7 @@ def normalize_screens_payload(
         name = _coerce_optional_string(raw_screen.get('name'), f'screens[{index}].name')
         enabled = _coerce_bool(raw_screen.get('enabled', True), f'screens[{index}].enabled')
         alignment = raw_screen.get('alignment', 'center')
-        if alignment not in ('left', 'center', 'right'):
+        if alignment not in ('left', 'center', 'right', 'centered-left'):
             alignment = 'center'
 
         if screen_type == 'manual':

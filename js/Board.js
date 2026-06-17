@@ -177,6 +177,11 @@ export class Board {
 
   _formatToGrid(lines, alignment = 'center') {
     const grid = [];
+    // Block width = the widest line. 'centered-left' centres the whole block
+    // while keeping every line flush to one common left column; flooring the
+    // left pad leaves any leftover cell on the right.
+    const maxLen = Math.max(0, ...lines.map((l) => (l || '').length));
+    const blockPadLeft = Math.max(0, Math.floor((this.cols - maxLen) / 2));
     for (let r = 0; r < this.rows; r++) {
       const line = (lines[r] || '').toUpperCase();
       const padTotal = this.cols - line.length;
@@ -185,6 +190,8 @@ export class Board {
         padLeft = 0;
       } else if (alignment === 'right') {
         padLeft = Math.max(0, padTotal);
+      } else if (alignment === 'centered-left') {
+        padLeft = blockPadLeft;
       } else {
         padLeft = Math.max(0, Math.floor(padTotal / 2));
       }
