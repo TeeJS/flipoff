@@ -12,8 +12,10 @@ document.addEventListener('DOMContentLoaded', () => {
 async function bootstrap() {
   const boardContainer = document.getElementById('board-container');
 
-  // Bare mode (?bare=1): strip all chrome and let the tiles fill the viewport.
-  if (new URLSearchParams(window.location.search).has('bare')) {
+  // Display URL flags — stackable, e.g. ?bare=1&shuffle=1.
+  const displayFlags = new URLSearchParams(window.location.search);
+  // Bare mode: strip all chrome and let the tiles fill the viewport.
+  if (displayFlags.has('bare')) {
     document.body.classList.add('bare');
   }
 
@@ -28,6 +30,7 @@ async function bootstrap() {
     messages: displayConfig.defaultMessages,
     alignments: displayConfig.defaultAlignments || [],
     messageDurationSeconds: displayConfig.messageDurationSeconds,
+    shuffle: displayFlags.has('shuffle'),
   });
   const keyboard = new KeyboardController(rotator, soundEngine);
 

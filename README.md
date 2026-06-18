@@ -21,6 +21,9 @@ No accounts. No subscriptions. No $199 fee. Just open `index.html` and go.
 - Fullscreen TV mode (press `F`)
 - Keyboard controls for manual navigation
 - Responsive from mobile to 4K displays
+- Chromeless full-bleed mode (`?bare=1`) for embedded and odd-aspect "bar" screens
+- Optional shuffled (random) screen rotation (`?shuffle=1`)
+- Per-screen text alignment: left, center, right, or centered-left
 - Vanilla frontend plus a tiny Python server — no build tools, no npm
 
 ## Quick Start
@@ -62,6 +65,17 @@ The Python server keeps the current remote message and display configuration in 
 The board starts at 18 columns by 5 rows. `message` payloads wrap on whole words, then the wrapped block is centered vertically while each line is centered horizontally by the board renderer.
 
 Admin changes are saved under `~/.flipoff/`, so board size, screen timing, plugin settings, screens, and API override duration survive a restart.
+
+## Display URL flags
+
+Open a board's fullscreen display page at `/<board-slug>` and append these query flags. They stack, e.g. `…/q?bare=1&shuffle=1`:
+
+| Flag | Effect |
+|------|--------|
+| `?bare=1` | Chromeless full-bleed mode — hides the panel border, accent squares, keyboard hint, and scroll indicator, and scales the square flap tiles to fill the viewport. Built for embedded or odd-aspect panels such as a 1920×480 ultrawide "bar" screen. |
+| `?shuffle=1` | Randomises the rotation. Each cycle plays every enabled screen once in a fresh random order and never repeats the screen that just played. Without it, screens rotate in their saved order. |
+
+Because the flap tiles are square, a grid of `columns = (aspect ratio) × rows` fills a panel cleanly — for a 4:1 bar that's `columns = 4 × rows` (e.g. 20 × 5).
 
 ## File Structure
 
